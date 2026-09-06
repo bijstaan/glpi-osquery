@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -219,7 +220,22 @@ func (u *Updater) Check() (bool, error) {
 	return true, nil
 }
 
+// safeVersion constrains a version string before it is used as a path segment.
+//
+// The version arrives in the server's update manifest, and apply joins it into
+// updates/agent-<v>.tar.gz and versions/<v>. A compromised — or simply buggy —
+// server must not be able to stage a tree outside the install root by
+// publishing a release called "../../etc". filepath.Base is not enough on its
+// own here: it leaves ".." intact, so the pattern is anchored to a leading
+// alphanumeric instead, which rejects ".", ".." and every name that starts by
+// climbing.
+var safeVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
+
 func (u *Updater) apply(pkg client.Package) error {
+	if !safeVersion.MatchString(pkg.Version) {
+		return fmt.Errorf("refusing a package with an unusable version %q", pkg.Version)
+	}
+
 	updatesDir := filepath.Join(u.cfg.StateDir, "updates")
 	if err := os.MkdirAll(updatesDir, 0o750); err != nil {
 		return err
