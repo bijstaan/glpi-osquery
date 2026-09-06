@@ -1,0 +1,38 @@
+[Unit]
+Description=GLPI osquery agent
+Documentation=https://github.com/bijstaan/glpi-osquery
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Rollback guard for a staged update — see preflight.sh. It runs before every
+# start, including the restarts systemd performs after a crash, which is exactly
+# what makes it able to catch a version that cannot start at all.
+ExecStartPre=/opt/glpi-osquery-agent/current/bin/preflight.sh
+ExecStart=/opt/glpi-osquery-agent/current/bin/glpi-osquery-agent run
+
+# The agent exits deliberately after staging an update so it comes back on the
+# new version, so restarts are always expected rather than a fault.
+Restart=always
+RestartSec=5s
+
+# osqueryd needs root to read SMBIOS, block devices and /sys/class/drm.
+User=root
+
+# Killing the agent must take osqueryd with it; a stranded osqueryd would keep
+# reporting while the supervisor believed nothing was running.
+KillMode=control-group
+TimeoutStopSec=45s
+
+StateDirectory=glpi-osquery-agent
+StateDirectoryMode=0750
+
+# Deliberately not sandboxed further: inventory collection is a
+# read-the-whole-machine job, and most hardening options here would silently
+# remove data from the inventory rather than fail loudly.
+NoNewPrivileges=no
+
+[Install]
+WantedBy=multi-user.target

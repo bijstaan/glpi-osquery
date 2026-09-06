@@ -1,0 +1,70 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (C) 2026 Bijstaan */
+/*
+ * Live query console.
+ *
+ * Monaco keeps a hidden <textarea> for keyboard input. GLPI's global form
+ * styling paints it like a real form control — visible border, background,
+ * padding and a resize grip — which renders as a stray white box floating over
+ * the editor and pushes the first line of code down. Everything in the first
+ * rule exists to undo that; none of it is cosmetic preference.
+ */
+.osq-console .monaco-editor textarea.inputarea {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    outline: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    resize: none !important;
+    min-height: 0 !important;
+    height: auto;
+}
+
+.osq-console .monaco-editor,
+.osq-console .monaco-editor .overflow-guard {
+    border-radius: 0;
+}
+
+/* Keep the editor's own scrollbars from colliding with the card border. */
+.osq-console .monaco-editor .scrollbar {
+    z-index: 5;
+}
+
+.osq-console [data-osq-schema-list] .list-group-item {
+    border: 0;
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+
+.osq-console [data-osq-schema-list] .list-group-item code {
+    background: transparent;
+    padding: 0;
+}
+
+/* Result cells hold arbitrary osquery output; keep long values from forcing
+   the table wider than the viewport. */
+.osq-console [data-osq-results] td {
+    max-width: 380px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.85rem;
+}
+
+.osq-console [data-osq-results] td:hover {
+    overflow: visible;
+    white-space: normal;
+    word-break: break-word;
+}
+
+.osq-console [data-osq-results] th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    white-space: nowrap;
+}
+
+.osq-console select[multiple] {
+    min-height: 5.5rem;
+}

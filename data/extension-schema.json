@@ -1,0 +1,20 @@
+{
+  "comment": "Tables provided by osquery extensions shipped with the GLPI agent. Merged into the upstream osquery catalogue by QueryCatalog::load() so the live-query console offers them like any other table. Keep in step with agent/cmd/*-ext.",
+  "tables": [
+    {
+      "name": "glpi_edid",
+      "description": "Monitor EDID blocks read from /sys/class/drm. Provided by the glpi-edid extension bundled with the GLPI osquery agent — it is not part of osquery, and returns nothing on a stock osqueryd. Exists because osquery has no monitor table on Linux and no way to read the raw bytes.",
+      "platforms": ["linux"],
+      "evented": false,
+      "extension": "glpi-edid",
+      "columns": [
+        { "name": "path", "type": "TEXT", "description": "Full sysfs path to the EDID file, e.g. /sys/class/drm/card1-DP-2/edid" },
+        { "name": "data", "type": "TEXT", "description": "Raw EDID block, hex encoded. Shaped to match the Windows registry EDID value so one decoder serves both platforms." },
+        { "name": "connector", "type": "TEXT", "description": "Connector the panel is attached to, e.g. DP-2, eDP-1, HDMI-A-1" },
+        { "name": "bytes", "type": "INTEGER", "description": "Length of the EDID block; 128 per block, so 384 means two extension blocks" },
+        { "name": "preferred_mode", "type": "TEXT", "description": "Mode the kernel prefers, e.g. 5120x1440. Trusted over decoding the EDID, because a native timing may live in a DisplayID extension block." },
+        { "name": "status", "type": "TEXT", "description": "Connector state as reported by the kernel: connected or disconnected" }
+      ]
+    }
+  ]
+}

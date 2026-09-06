@@ -1,0 +1,49 @@
+{
+  "enroll_secret": "probe-enroll-secret",
+  "host_details": {
+    "os_version": {
+      "_id": "26.04",
+      "arch": "x86_64",
+      "codename": "resolute",
+      "major": "26",
+      "minor": "04",
+      "name": "Ubuntu",
+      "patch": "0",
+      "pid_with_namespace": "0",
+      "platform": "ubuntu",
+      "platform_like": "debian",
+      "version": "26.04 LTS (Resolute Raccoon)"
+    },
+    "osquery_info": {
+      "build_distro": "centos7",
+      "build_platform": "linux",
+      "config_hash": "",
+      "config_valid": "0",
+      "extensions": "inactive",
+      "instance_id": "a3ebc27b-7944-4e3a-91ef-ef334cdf902f",
+      "pid": "85828",
+      "platform_mask": "9",
+      "start_time": "1786803492",
+      "uuid": "688f59f0-09e0-4bbb-8793-390474f76cf5",
+      "version": "5.19.0",
+      "watcher": "-1"
+    },
+    "system_info": {
+      "computer_name": "Matt-Framework",
+      "cpu_brand": "AMD Ryzen 7 7840U w/ Radeon  780M Graphics     \u0000",
+      "cpu_logical_cores": "16",
+      "cpu_microcode": "0xa70410a",
+      "cpu_physical_cores": "8",
+      "cpu_sockets": "1",
+      "cpu_subtype": "116",
+      "cpu_type": "x86_64",
+      "hardware_model": "",
+      "hostname": "Matt-Framework",
+      "local_hostname": "Matt-Framework",
+      "physical_memory": "32376655872",
+      "uuid": "688f59f0-09e0-4bbb-8793-390474f76cf5"
+    }
+  },
+  "host_identifier": "Matt-Framework",
+  "platform_type": "9"
+}

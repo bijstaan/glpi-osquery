@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Windows installer for the agent.
+
+  Written in the WiX v3 dialect and built with wixl, from GNOME's msitools.
+  wixl is LGPL, runs natively on Linux, and carries no licence gate — WiX v6 and
+  later require accepting the Open Source Maintenance Fee EULA, with a fee due
+  above a revenue threshold, and WiX only ever emits an MSI on Windows, so the
+  whole release could not be built in one place.
+
+  wixl supports a subset of WiX: no CustomAction/@Directory, no SetProperty, no
+  ServiceConfig, no util:PermissionEx. Rather than approximate those with a pile
+  of shell-outs whose only error reporting is an exit code, everything after
+  "lay down the files and register the service" is one call into the agent
+  itself — `glpi-osquery-agent msi-install`. That code is ordinary Go: it
+  reports real errors and can be tested.
+
+    msiexec /i glpi-osquery-agent_1.0.1_amd64.msi /qn ^
+        SERVER=https://glpi.example.com ENROLLSECRET=<secret>
+
+  Properties:
+    SERVER          GLPI base URL. Required to enrol.
+    ENROLLSECRET    enrollment secret from Setup > osquery Inventory. Required to enrol.
+    CACERT          path on the target machine to a PEM bundle for a private CA
+    NOUPDATES       1 to pin this host to the installed version
+
+  Variables supplied by build-msi.sh:
+    Version      MSI ProductVersion — numeric only, e.g. 1.0.1
+    FullVersion  the agent's own version string, e.g. 1.0.1-rc1
+    StageDir     directory holding bin/ from the bundle
+
+  Version and FullVersion are separate on purpose. MSI's ProductVersion cannot
+  carry a prerelease suffix, but the versioned directory must be named exactly
+  what the binary reports — the updater compares the two when deciding what to
+  keep and what to prune. msi-install checks this and says so.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="GLPI osquery Agent"
+           Manufacturer="Bijstaan"
+           Version="$(var.Version)"
+           UpgradeCode="6a0d2e3c-9b41-4f5a-8e77-2d4b1c0f9a63"
+           Language="1033">
+
+    <Package InstallerVersion="200"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="GLPI osquery agent"
+             Manufacturer="Bijstaan" />
+
+    <Media Id="1" Cabinet="osquery.cab" EmbedCab="yes" />
+
+    <!-- Any upgrade replaces the whole tree. The versioned directory exists to
+         give the self-updater somewhere to roll back to, not to keep old MSI
+         installs side by side. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of the GLPI osquery agent is already installed." />
+
+    <Condition Message="This installer must be run with administrative privileges: osqueryd needs them to read WMI, the registry and disk information.">Privileged</Condition>
+
+    <!-- Masks the secret in a verbose install log. This is the MSI mechanism
+         WiX's Hidden="yes" writes to; wixl has no such attribute, so the
+         underlying property is set directly. Not a guarantee — see MsiInstall.
+
+         SERVER, ENROLLSECRET, CACERT and NOUPDATES are deliberately not
+         declared: a public property needs no declaration to be settable, an
+         undeclared one formats as the empty string, and wixl rejects Value="".
+         They are added to SecureCustomProperties by build-msi.sh, which cannot
+         be done here without colliding with the row MajorUpgrade generates. -->
+    <Property Id="MsiHiddenProperties" Value="ENROLLSECRET" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="GLPI osquery Agent">
+          <Directory Id="VersionsDir" Name="versions">
+            <Directory Id="VersionDir" Name="$(var.FullVersion)">
+              <Directory Id="BinDir" Name="bin">
+
+                <Component Id="AgentExe" Guid="2f8b47d1-6c05-4e92-a3f7-51d9c6b8402e" Win64="yes">
+                  <File Id="agent.exe"
+                        Name="glpi-osquery-agent.exe"
+                        Source="$(var.StageDir)/bin/glpi-osquery-agent.exe"
+                        KeyPath="yes" />
+
+                  <!--
+                    LocalSystem: osqueryd needs it for WMI, the registry and raw
+                    disk reads.
+
+                    Start="demand" and no Start on ServiceControl: the service is
+                    repointed at `current`, given its failure actions and possibly
+                    enrolled by msi-install, and only then started and switched to
+                    automatic. A deployment that omitted the credentials leaves a
+                    registered, idle service rather than one restart-looping
+                    against a server it was never told about.
+
+                    The binary path is corrected by msi-install, because
+                    ServiceInstall derives it from this component's key file —
+                    the *versioned* one — and offers no way to override it.
+                  -->
+                  <ServiceInstall Id="AgentService"
+                                  Name="GLPIOsqueryAgent"
+                                  DisplayName="GLPI osquery agent"
+                                  Description="Reports inventory to GLPI and answers live queries, via a bundled osqueryd."
+                                  Type="ownProcess"
+                                  Start="demand"
+                                  ErrorControl="normal"
+                                  Account="LocalSystem"
+                                  Arguments="run"
+                                  Vital="yes" />
+
+                  <ServiceControl Id="AgentServiceControl"
+                                  Name="GLPIOsqueryAgent"
+                                  Stop="both"
+                                  Remove="uninstall"
+                                  Wait="yes" />
+                </Component>
+
+                <Component Id="OsquerydExe" Guid="9d3c5a70-8f21-4b6d-95e8-7a0c14f3d6b9" Win64="yes">
+                  <File Id="osqueryd.exe"
+                        Name="osqueryd.exe"
+                        Source="$(var.StageDir)/bin/osqueryd.exe"
+                        KeyPath="yes" />
+                </Component>
+
+              </Directory>
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <!-- wixl has no SetProperty, so this is a type 51 property-setting custom
+         action, which is what SetProperty compiles to anyway. NOUPDATES becomes
+         a bare flag, so unlike the value-taking options it cannot simply expand
+         to an empty string when unset. -->
+    <CustomAction Id="SetNoUpdates" Property="NoUpdatesFlag" Value="--no-updates" />
+
+    <!--
+      Everything the installer cannot express, in one call.
+
+      FileKey rather than a directory-relative path: it binds to the file this
+      package installs, so the action cannot run a stale binary left behind by
+      an earlier version.
+
+      ExeCommand is a Formatted field, resolved while the execution script is
+      written and fixed into it, which is what lets a deferred action see
+      [ENROLLSECRET] at all. Consequence worth knowing: with verbose logging
+      (/l*v) the resolved command line can reach the log, so the secret may be
+      recoverable despite MsiHiddenProperties. That is tolerable because of what
+      an enrollment secret is — a shared, scopable, revocable credential that
+      buys exactly one thing, the right to obtain a per-agent node key. If a log
+      leaks one, revoke it in GLPI and it is dead; agents that already enrolled
+      keep working on their own keys.
+    -->
+    <CustomAction Id="MsiInstall"
+                  FileKey="agent.exe"
+                  ExeCommand="msi-install --install-root &quot;[INSTALLFOLDER]&quot; --server &quot;[SERVER]&quot; --secret &quot;[ENROLLSECRET]&quot; --ca-cert &quot;[CACERT]&quot; [NoUpdatesFlag]"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <CustomAction Id="MsiUninstall"
+                  FileKey="agent.exe"
+                  ExeCommand="msi-uninstall --install-root &quot;[INSTALLFOLDER]&quot;"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="SetNoUpdates" Before="InstallInitialize">NOUPDATES = "1"</Custom>
+
+      <!-- After InstallServices: the service must exist before its binary path
+           and failure actions can be corrected. -->
+      <Custom Action="MsiInstall" After="InstallServices">NOT REMOVE</Custom>
+
+      <!-- Before RemoveFiles, while the binary that does the work is still on
+           disk. -->
+      <Custom Action="MsiUninstall" Before="RemoveFiles">REMOVE="ALL"</Custom>
+    </InstallExecuteSequence>
+
+    <Feature Id="Main" Title="GLPI osquery Agent" Level="1">
+      <ComponentRef Id="AgentExe" />
+      <ComponentRef Id="OsquerydExe" />
+    </Feature>
+  </Product>
+</Wix>

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd daemon for the GLPI osquery agent.
+
+  RunAtLoad + KeepAlive is the launchd equivalent of systemd's Restart=always:
+  the agent exits deliberately after staging an update so it comes back on the
+  new version, so a restart is expected rather than a fault.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.bijstaan.glpi-osquery-agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/glpi-osquery-agent/current/bin/glpi-osquery-agent</string>
+        <string>run</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- osqueryd needs root to read SMBIOS, disks and the IORegistry. -->
+    <key>UserName</key>
+    <string>root</string>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/glpi-osquery-agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/glpi-osquery-agent.log</string>
+
+    <!-- Give a staged update time to be judged before launchd retries. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

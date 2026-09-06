@@ -1,0 +1,25 @@
+{
+  "data": [
+    {
+      "action": "snapshot",
+      "calendarTime": "Sat Aug 15 14:18:30 2026 UTC",
+      "counter": 0,
+      "epoch": 0,
+      "hostIdentifier": "Matt-Framework",
+      "name": "probe_os_version",
+      "numerics": false,
+      "snapshot": [
+        {
+          "arch": "x86_64",
+          "build": "",
+          "name": "Ubuntu",
+          "platform": "ubuntu",
+          "version": "26.04 LTS (Resolute Raccoon)"
+        }
+      ],
+      "unixTime": 1786803510
+    }
+  ],
+  "log_type": "result",
+  "node_key": "probe-node-key-1"
+}

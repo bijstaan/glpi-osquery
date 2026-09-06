@@ -1,0 +1,156 @@
+{
+  "data": [
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "init.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 413,
+      "message": "osquery initialized [version=5.19.0]",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "tls.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 263,
+      "message": "TLS/HTTPS POST request to URI: https://127.0.0.1:8099/config",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "dispatcher.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 78,
+      "message": "Adding new service: TLSLogForwarder (0x63f9f7a40468) to thread: 138798352549568 (0x63f9f7b51760) in process 85828",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "loader.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 45,
+      "message": "No experiments selected",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "dispatcher.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 78,
+      "message": "Adding new service: DistributedRunner (0x63f9f7c4a528) to thread: 138798360942272 (0x63f9f7b5aaf0) in process 85828",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "dispatcher.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 78,
+      "message": "Adding new service: SchedulerRunner (0x63f9f7c361b8) to thread: 138798614689472 (0x63f9f7a6e930) in process 85828",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "tls.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 263,
+      "message": "TLS/HTTPS POST request to URI: https://127.0.0.1:8099/distributed/read",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "extensions.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 453,
+      "message": "Could not autoload extensions: Cannot open file for reading: /etc/osquery/extensions.load",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "rocksdb.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 90,
+      "message": "Opening RocksDB handle: /var/osquery/osquery.db",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "init.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 714,
+      "message": "An error occurred during extension manager startup: Extension socket directory missing: /var/osquery/osquery.em",
+      "severity": 2,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "tls_enroll.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 81,
+      "message": "TLSEnrollPlugin requesting a node enroll key from: https://127.0.0.1:8099/enroll",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "smbios_tables.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 253,
+      "message": "Could not read SMBIOS memory",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "tls.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 263,
+      "message": "TLS/HTTPS POST request to URI: https://127.0.0.1:8099/enroll",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "auto_constructed_tables.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 107,
+      "message": "Removing stale ATC entries",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    },
+    {
+      "calendarTime": "Sat Aug 15 14:18:12 2026 UTC",
+      "filename": "dispatcher.cpp",
+      "hostIdentifier": "Matt-Framework",
+      "line": 78,
+      "message": "Adding new service: ConfigRefreshRunner (0x63f9f7a59318) to thread: 138798344156864 (0x63f9f7a59220) in process 85828",
+      "severity": 0,
+      "unixTime": 1786803492,
+      "version": "5.19.0"
+    }
+  ],
+  "log_type": "status",
+  "node_key": "probe-node-key-1"
+}

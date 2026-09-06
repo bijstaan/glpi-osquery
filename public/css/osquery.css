@@ -1,0 +1,157 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Copyright (C) 2026 Bijstaan */
+/*
+ * Plugin-wide theme conformance (loaded on every page via add_css; the
+ * console keeps its own console.css for the Monaco-specific rules).
+ *
+ * Everything here is scoped under :root[data-glpi-theme-dark="1"] and the
+ * plugin's own containers, so the light theme is untouched by construction.
+ * Every surface the plugin ships wraps itself in (or carries) the
+ * `glpiosquery-surface` marker class — including the core-rendered
+ * agent/saved-query form pages, which otherwise contain no plugin-classed
+ * element at all and are structurally unreachable by any scoped rule.
+ *
+ * Numbers below are live-measured on this install's auror_dark palette
+ * (body #1f2936, --tblr-muted #757d91, --tblr-secondary-color
+ * rgba(31,41,55,.75)). Trust the
+ * audit's computed-contrast output over any constant quoted here.
+ */
+
+/*
+ * Muted / helper text.
+ *
+ * Core's `.text-muted { color: var(--tblr-muted) !important; }` cannot be
+ * beaten by a property override at any specificity — the fix is to
+ * redefine the VARIABLE inside the plugin scope, which then legitimately
+ * resolves inside core's own !important declaration. `.form-text` reads
+ * `--tblr-secondary-color` instead, which on auror_dark is
+ * rgba(31,41,55,.75) — the body background with alpha, i.e. 1.05:1,
+ * invisible — so both variables are redefined together.
+ *
+ * `transparent 10%` measured 4.9–5.1:1 against both the body and the
+ * slightly lighter card surface; the 28% this file's predecessor rules
+ * used under-shoots (3.3–3.5:1) on auror_dark.
+ */
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface,
+:root[data-glpi-theme-dark="1"] .osq-console {
+    --tblr-muted: color-mix(in srgb, var(--tblr-body-color), transparent 10%);
+    --tblr-secondary-color: color-mix(in srgb, var(--tblr-body-color), transparent 10%);
+}
+
+/*
+ * Inline code — table names in the console's schema list, the install
+ * one-liner on the settings page. Core's --tblr-code-color resolves its
+ * dark light-dark() arm to color-mix(#232e3c, body 12%): 2.12:1 on the
+ * dark body, unreadable. Core-wide gap (flagged), scoped fix here.
+ */
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface code,
+:root[data-glpi-theme-dark="1"] .osq-console code {
+    color: var(--tblr-body-color);
+}
+
+/*
+ * Solid badges. On auror_dark core's .badge inherits the page's ambient
+ * light-blue text colour instead of a contrasting one (measured 1.09:1 on
+ * bg-secondary, 1.55:1 on bg-green — the near-identical trap, not just
+ * low contrast). Core-wide gap (same one glpikedb scoped a fix for);
+ * per-colour text picked by measurement: black clears 7:1+ on the green /
+ * secondary / orange faces (white would fail on all three), white clears
+ * 4.67:1 on red. The !important matches the text-white utility one of the
+ * warning badges also carries.
+ */
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .badge.bg-secondary,
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .badge.bg-green,
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .badge.bg-success,
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .badge.bg-orange,
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .badge.bg-warning,
+:root[data-glpi-theme-dark="1"] .osq-console .badge.bg-secondary {
+    color: #000 !important;
+}
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .badge.bg-red,
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .badge.bg-danger {
+    color: #fff !important;
+}
+
+/*
+ * -lt badges (console schema list: "evented" / "ext"; agent detail's pack
+ * chips). Their text is the full-strength hue on their own 10%-alpha tint
+ * — orange-lt measured 4.0:1 over the card it sits on. Tone-lift the text
+ * toward white; !important matches core's own on the -lt colour.
+ * NEVER self-reference the variable in a redefine — these are property
+ * overrides on purpose.
+ */
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .badge.bg-orange-lt,
+:root[data-glpi-theme-dark="1"] .osq-console .badge.bg-orange-lt {
+    color: color-mix(in srgb, var(--tblr-orange), white 45%) !important;
+}
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .badge.bg-blue-lt,
+:root[data-glpi-theme-dark="1"] .osq-console .badge.bg-blue-lt {
+    color: color-mix(in srgb, var(--tblr-blue), white 40%) !important;
+}
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .badge.bg-azure-lt,
+:root[data-glpi-theme-dark="1"] .osq-console .badge.bg-azure-lt {
+    color: color-mix(in srgb, var(--tblr-azure), white 40%) !important;
+}
+
+/*
+ * Solid buttons: same ambient-text core gap as the badges — "Create
+ * secret" (btn-success) measured 1.15:1. Redefining the button's own
+ * colour variables (not the property) keeps hover/focus consistent.
+ */
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .btn-success,
+:root[data-glpi-theme-dark="1"] .osq-console .btn-success {
+    --tblr-btn-color: #000;
+    --tblr-btn-hover-color: #000;
+    --tblr-btn-active-color: #000;
+}
+/*
+ * .btn-primary needs NO fix: auror_dark's --tblr-primary is a yellow
+ * (#fec95c) and core already pairs it with dark-slate button text
+ * (#1e293b, 9.5:1). A blanket white-text "fix" here measured 1.53:1 —
+ * measure before overriding.
+ */
+
+/*
+ * Outline buttons rest in their hue on the dark surface: --tblr-red
+ * measured 2.95:1 ("Revoke"). Lift the resting text only — hover fills
+ * the button and takes core's own hover colour.
+ */
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .btn-outline-danger,
+:root[data-glpi-theme-dark="1"] .osq-console .btn-outline-danger {
+    --tblr-btn-color: color-mix(in srgb, var(--tblr-red), white 40%);
+}
+
+/*
+ * Inactive .nav-link (core's tab bar / "Others" overflow inside the
+ * wrapped form pages) reads --tblr-gray-500 on the dark body — the same
+ * core-wide gap glpikedb and glpiservice scoped this exact fix for.
+ */
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .nav-link {
+    color: color-mix(in srgb, var(--tblr-body-color), transparent 12%);
+}
+
+/*
+ * The Run button's kbd hint is `text-white-50` — half-alpha white, which
+ * on auror_dark's yellow primary face measures 1.24:1. Re-key it to the
+ * button's own text colour (which core already dims to a brown-slate,
+ * #644e21, on the yellow face — 5.1:1) at FULL strength: any added alpha
+ * re-fails the floor (75% measured 3.2:1). !important matches the
+ * utility's own.
+ */
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .btn .text-white-50,
+:root[data-glpi-theme-dark="1"] .osq-console .btn .text-white-50 {
+    color: var(--tblr-btn-color, var(--tblr-body-color)) !important;
+}
+
+/*
+ * The entity toggle ("Child entities") on core's form header: the label
+ * sits inside core's `.is_recursive-toggle` badge (a dark-slate face on
+ * auror_dark) and core dims the inactive side to opacity .7 — the ambient
+ * label colour lands at 2.8–4.1:1 through that dim. Core-wide gap
+ * (flagged). Near-white text clears 4.76:1 THROUGH the .7 dim while the
+ * opacity still carries the checked/unchecked distinction.
+ */
+:root[data-glpi-theme-dark="1"] .glpiosquery-surface .is_recursive-toggle .form-check-label,
+:root[data-glpi-theme-dark="1"] .osq-console .is_recursive-toggle .form-check-label {
+    color: color-mix(in srgb, var(--tblr-body-color), white 85%);
+}
