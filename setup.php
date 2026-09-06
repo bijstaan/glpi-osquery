@@ -16,8 +16,8 @@
  * GLPI-native inventory document and handed to Glpi\Inventory\Inventory, so
  * assets land as ordinary Computers with the import rules engine applied.
  *
- * See docs/spec.md for the architecture and docs/protocol.md for the wire
- * format (verified against osquery 5.19.0, not taken from documentation).
+ * The wire format was verified against osquery 5.19.0, not taken from
+ * documentation.
  */
 
 use Glpi\Http\Firewall;

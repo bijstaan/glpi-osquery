@@ -9,8 +9,6 @@ Two deliverables:
 |---|---|
 | `plugin/` | The GLPI 11 plugin (`glpiosquery`). Speaks osquery's TLS remote API, assembles inventory, runs live queries. |
 | `agent/` | The endpoint agent (Go): supervises a bundled `osqueryd`, self-updates, and ships the Linux EDID extension. |
-| `docs/spec.md` | Architecture, data model, mapping tables, phase plan. **Read this first.** |
-| `docs/protocol.md` | The osquery wire protocol as *measured*, not as documented. |
 | `testdata/protocol/` | Real request captures used as fixtures. |
 
 ## How it works
@@ -227,7 +225,7 @@ Windows or macOS machine was available here. The MSI itself *is* built locally: 
 produced on Linux by `packaging/build-msi.sh` using wixl from GNOME's msitools, which also
 asserts the package's contents. The `windows-msi` workflow then installs and uninstalls it
 on a Windows runner and checks the service resolves through the `current` junction rather
-than a versioned path. See the deviations log in `docs/spec.md`.
+than a versioned path.
 
 ---
 

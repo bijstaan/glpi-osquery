@@ -155,8 +155,8 @@ func (s *Supervisor) WriteFlagfile() error {
 	// arrive needs nothing but a file written into place.
 	// 0750 matches the state directory this lives inside (and systemd's
 	// StateDirectoryMode). osqueryd's autoload safety check is on the extension
-	// *file's* ownership, not on the directory's mode — measured on 5.19.0, see
-	// docs/spec.md — so tightening the directory changes nothing it cares about.
+	// *file's* ownership, not on the directory's mode — measured on 5.19.0 — so
+	// tightening the directory changes nothing it cares about.
 	if err := os.MkdirAll(s.cfg.ExtensionsDir(), 0o750); err != nil {
 		return fmt.Errorf("create extensions directory: %w", err)
 	}

@@ -609,7 +609,7 @@ function plugin_glpiosquery_install_defaults()
 {
     Config::setConfigurationValues(PLUGIN_GLPIOSQUERY_CONFIG_CONTEXT, [
         // The single most important number in the system: live-query latency
-        // versus idle load. See docs/protocol.md.
+        // versus idle load.
         'distributed_interval' => 10,
         // How long targeted agents stay on the accelerated 5s cadence.
         'accelerate_seconds'   => 60,

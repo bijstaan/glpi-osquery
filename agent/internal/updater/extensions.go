@@ -224,7 +224,7 @@ func (u *Updater) installExtension(ext client.Extension, name, dest string) erro
 	// Executable by its owner and group, readable by neither anyone else: this
 	// is a binary osqueryd runs as root, and no other account on the machine
 	// has any reason to read or run it. What osqueryd insists on is ownership,
-	// not a particular mode (docs/spec.md, 2026-08-21), so 0750 loads exactly
+	// not a particular mode (measured 2026-08-21), so 0750 loads exactly
 	// as 0755 did.
 	if err := os.Chmod(staging, 0o750); err != nil {
 		return err
