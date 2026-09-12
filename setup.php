@@ -30,8 +30,10 @@ use GlpiPlugin\Glpiosquery\MonitorTab;
 use GlpiPlugin\Glpiosquery\SavedQuery;
 use GlpiPlugin\Glpiosquery\TicketEvidence;
 use GlpiPlugin\Glpiosquery\TicketEvidenceTab;
+use GlpiPlugin\Glpiosquery\WarrantyTab;
+use Glpi\Plugin\Hooks;
 
-define('PLUGIN_GLPIOSQUERY_VERSION', '0.2.1');
+define('PLUGIN_GLPIOSQUERY_VERSION', '0.3.0');
 define('PLUGIN_GLPIOSQUERY_MIN_GLPI', '11.0');
 
 // Config context for plugin settings (Config::setConfigurationValues).
@@ -117,6 +119,26 @@ function plugin_init_glpiosquery()
     // reading to show that whatever they did actually moved something.
     Plugin::registerClass(TicketEvidenceTab::class, ['addtabon' => ['Ticket']]);
 
+    // "Warranty" tab on an inventoried machine. The dates themselves go into
+    // GLPI's own Infocom fields, so this tab carries what Infocom has no room
+    // for: the full entitlement list, and why there is no warranty when there
+    // is none. Shown only where there is something to say — see
+    // WarrantyTab::getTabNameForItem.
+    Plugin::registerClass(WarrantyTab::class, ['addtabon' => ['Computer']]);
+
+    // Seven vendors' API credentials. Declaring them here is what makes
+    // Config::setConfigurationValues() encrypt them on write, mask them in the
+    // history log, and re-encrypt them when an administrator runs
+    // `glpi:security:changekey` — without which a key rotation silently
+    // orphans every one of them at once.
+    //
+    // SECURED_CONFIGS rather than SECURED_FIELDS: the values live in
+    // `glpi_configs.value`, a core column shared with every other setting in
+    // GLPI, and naming that column would point the rotation migration at all
+    // of them.
+    $PLUGIN_HOOKS[Hooks::SECURED_CONFIGS]['glpiosquery'] =
+        GlpiPlugin\Glpiosquery\Warranty\Settings::secretKeys();
+
     // Capture triage evidence when an asset is attached to a ticket.
     //
     // Hooked on the *link* rather than on Ticket creation: at the moment a
@@ -125,6 +147,13 @@ function plugin_init_glpiosquery()
     // later, which is how a ticket that arrives by email gets its evidence.
     $PLUGIN_HOOKS['item_add']['glpiosquery'] = [
         'Item_Ticket' => 'plugin_glpiosquery_item_linked_to_ticket',
+    ];
+
+    // A purged asset takes its warranty lookup with it. The row is keyed on
+    // (itemtype, items_id) and GLPI reuses ids, so an orphan would eventually
+    // attach one machine's warranty history to an unrelated new one.
+    $PLUGIN_HOOKS['item_purge']['glpiosquery'] = [
+        'Computer' => 'plugin_glpiosquery_item_purged',
     ];
 }
 

@@ -7,6 +7,7 @@
 use GlpiPlugin\Glpiosquery\DefaultPacks;
 use GlpiPlugin\Glpiosquery\InventorySync;
 use GlpiPlugin\Glpiosquery\TicketEvidence;
+use GlpiPlugin\Glpiosquery\Warranty;
 
 /**
  * Install: create the plugin tables, register rights, seed the default
@@ -347,6 +348,55 @@ function plugin_glpiosquery_install()
         );
     }
 
+    // ------------------------------------------------------------- warranties
+    // One row per asset the warranty lookup has considered. The warranty
+    // itself lives in `glpi_infocoms`, which is the point of the feature; this
+    // table holds the three things Infocom has no room for — the full
+    // entitlement list behind the single span that was written, the failures
+    // (an empty Infocom cannot tell "the vendor has no record" from "the
+    // credentials expired"), and the schedule that keeps a nightly pass over a
+    // large estate inside a vendor's rate limit.
+    //
+    // `applied_signature` is a fingerprint of what this plugin last wrote. If
+    // the asset's warranty fields no longer match it, a person has edited them
+    // and the lookup is recorded but not applied.
+    if (!$DB->tableExists(Warranty\Record::TABLE)) {
+        $DB->doQuery(
+            "CREATE TABLE `" . Warranty\Record::TABLE . "` (
+                `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                `itemtype` VARCHAR(100) NOT NULL,
+                `items_id` INT UNSIGNED NOT NULL DEFAULT 0,
+                `serial` VARCHAR(255) NOT NULL DEFAULT '',
+                `vendor` VARCHAR(32) NOT NULL DEFAULT '',
+                `status` VARCHAR(16) NOT NULL DEFAULT '',
+                `message` VARCHAR(500) NOT NULL DEFAULT '',
+                `product` VARCHAR(255) NOT NULL DEFAULT '',
+                `service_level` VARCHAR(255) NOT NULL DEFAULT '',
+                `principal_type` VARCHAR(16) NOT NULL DEFAULT '',
+                `start_date` DATE NULL DEFAULT NULL,
+                `end_date` DATE NULL DEFAULT NULL,
+                `is_lifetime` TINYINT NOT NULL DEFAULT 0,
+                `is_covered` TINYINT NOT NULL DEFAULT 0,
+                `ship_date` DATE NULL DEFAULT NULL,
+                `purchase_date` DATE NULL DEFAULT NULL,
+                `country` VARCHAR(8) NOT NULL DEFAULT '',
+                `entitlement_count` INT UNSIGNED NOT NULL DEFAULT 0,
+                `entitlements` MEDIUMTEXT NULL,
+                `applied` TINYINT NOT NULL DEFAULT 0,
+                `applied_signature` VARCHAR(64) NOT NULL DEFAULT '',
+                `checked_at` TIMESTAMP NULL DEFAULT NULL,
+                `next_check_at` TIMESTAMP NULL DEFAULT NULL,
+                `date_creation` TIMESTAMP NULL DEFAULT NULL,
+                `date_mod` TIMESTAMP NULL DEFAULT NULL,
+                PRIMARY KEY (`id`),
+                UNIQUE KEY `item` (`itemtype`,`items_id`),
+                KEY `due` (`next_check_at`),
+                KEY `vendor` (`vendor`,`status`),
+                KEY `end_date` (`end_date`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=$charset COLLATE=$collate"
+        );
+    }
+
     plugin_glpiosquery_migrate();
     plugin_glpiosquery_install_rights();
     plugin_glpiosquery_install_defaults();
@@ -517,6 +567,22 @@ function plugin_glpiosquery_install_crons()
         300,
         ['state' => CronTask::STATE_WAITING, 'mode' => CronTask::MODE_EXTERNAL]
     );
+
+    // Warranty lookups run hourly and do a bounded amount of work each time,
+    // rather than nightly and all at once. The resource being spent is a
+    // vendor's rate limit, and a trickle is both kinder to it and quicker to
+    // surface a credential problem than a single burst at 03:00.
+    //
+    // Registered whether or not the feature is switched on: the task itself
+    // returns immediately while the master switch is off, and a cron that only
+    // appears once a setting is saved is one an administrator cannot find in
+    // order to schedule it.
+    CronTask::register(
+        Warranty\Sync::class,
+        'warrantyLookup',
+        HOUR_TIMESTAMP,
+        ['state' => CronTask::STATE_WAITING, 'mode' => CronTask::MODE_EXTERNAL]
+    );
 }
 
 /**
@@ -607,7 +673,7 @@ function plugin_glpiosquery_install_rights()
  */
 function plugin_glpiosquery_install_defaults()
 {
-    Config::setConfigurationValues(PLUGIN_GLPIOSQUERY_CONFIG_CONTEXT, [
+    $defaults = [
         // The single most important number in the system: live-query latency
         // versus idle load.
         'distributed_interval' => 10,
@@ -642,7 +708,24 @@ function plugin_glpiosquery_install_defaults()
         // into someone else's helpdesk queue, which should be a deliberate
         // choice rather than a side effect of installing a plugin.
         'compliance_tickets' => 0,
-    ]);
+    ] + Warranty\Settings::defaults();
+
+    // Only the keys that are not stored yet.
+    //
+    // GLPI re-runs the install hook on every version change, and
+    // Config::setConfigurationValues() overwrites unconditionally — so seeding
+    // the whole list would reset an administrator's tuning on each upgrade,
+    // silently and with nothing in the log to say it happened.
+    $stored = Config::getConfigurationValues(
+        PLUGIN_GLPIOSQUERY_CONFIG_CONTEXT,
+        array_keys($defaults)
+    );
+
+    $missing = array_diff_key($defaults, $stored);
+
+    if ($missing !== []) {
+        Config::setConfigurationValues(PLUGIN_GLPIOSQUERY_CONFIG_CONTEXT, $missing);
+    }
 
     DefaultPacks::seed();
     GlpiPlugin\Glpiosquery\SavedQuery::seedDefaults();
@@ -666,6 +749,7 @@ function plugin_glpiosquery_uninstall()
             'glpi_plugin_glpiosquery_agents',
             'glpi_plugin_glpiosquery_savedqueries',
             'glpi_plugin_glpiosquery_enrollsecrets',
+            'glpi_plugin_glpiosquery_warranties',
         ] as $table
     ) {
         if ($DB->tableExists($table)) {
@@ -694,6 +778,14 @@ function plugin_glpiosquery_uninstall()
         'agent_trusted_addresses', 'compliance_tickets',
     ]);
 
+    // Including every vendor credential. Leaving those behind would keep seven
+    // support-portal secrets in the database of an instance that no longer has
+    // the plugin that reads them.
+    Config::deleteConfigurationValues(
+        PLUGIN_GLPIOSQUERY_CONFIG_CONTEXT,
+        array_keys(Warranty\Settings::defaults())
+    );
+
     return true;
 }
 
@@ -719,6 +811,30 @@ function plugin_glpiosquery_item_linked_to_ticket($item)
     } catch (\Throwable $e) {
         trigger_error(
             'glpiosquery: could not capture ticket evidence: ' . $e->getMessage(),
+            E_USER_WARNING
+        );
+    }
+}
+
+/**
+ * An asset was purged: forget what the vendor told us about it.
+ *
+ * GLPI reuses primary keys, so a lookup row left behind on (itemtype, items_id)
+ * would eventually be read as belonging to an unrelated new machine — and it
+ * would be read, because the row carries the signature that decides whether
+ * this plugin may write that asset's warranty fields.
+ */
+function plugin_glpiosquery_item_purged($item)
+{
+    if (!($item instanceof CommonDBTM)) {
+        return;
+    }
+
+    try {
+        Warranty\Record::purgeItem($item->getType(), (int) $item->getID());
+    } catch (\Throwable $e) {
+        trigger_error(
+            'glpiosquery: could not clear the warranty record: ' . $e->getMessage(),
             E_USER_WARNING
         );
     }

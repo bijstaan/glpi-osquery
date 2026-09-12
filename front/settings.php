@@ -265,6 +265,23 @@ echo "osquery " . htmlspecialchars(PLUGIN_GLPIOSQUERY_OSQUERY_VERSION) . " is th
 echo "</div>";
 echo "</div></div>";
 
+// Warranty lookups live on a page of their own: seven vendors with up to eight
+// credentials each is more configuration than everything on this page put
+// together, and it is a separate decision — nothing leaves the building until
+// somebody makes it.
+echo "<div class='card mb-3'><div class='card-body d-flex justify-content-between align-items-center'>";
+echo "<div>";
+echo "<strong>" . __('Warranty lookups', 'glpiosquery') . "</strong><br>";
+echo "<span class='text-muted'>"
+   . __('Ask Dell, HP, HPE, Lenovo, Apple, Cisco and Fortinet about the serial numbers in this '
+      . 'estate, and write what they say onto each asset\'s Financial information tab.', 'glpiosquery')
+   . "</span>";
+echo "</div>";
+echo "<a class='btn btn-outline-primary' href='"
+   . GlpiPlugin\Glpiosquery\Url::to('front/warranty.php') . "'>"
+   . __('Configure', 'glpiosquery') . "</a>";
+echo "</div></div>";
+
 // -------------------------------------------------------------------- settings
 echo "<form method='post'>";
 echo $csrf;

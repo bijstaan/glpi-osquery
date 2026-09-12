@@ -193,15 +193,111 @@ by default — a process list is for the technician, not the requester. A machin
 answers still gets a followup saying so, because silence in the timeline is indistinguishable
 from the feature being switched off.
 
+## Warranty lookups
+
+The plugin can ask hardware vendors when each inventoried machine's warranty ends, and write
+the answer into **GLPI's own warranty fields** on the asset's *Financial information* tab —
+`warranty_date`, `warranty_duration` and `warranty_info`. Nothing is stored in a private
+format, so GLPI's existing warranty-expiry search option, its expiry-alert cron, the
+dashboards and CSV export all keep working with no further help.
+
+Setup → osquery Inventory → **Warranty lookups**.
+
+| Vendor | API | Credentials |
+|---|---|---|
+| Dell | TechDirect Asset Entitlements v5 | OAuth2 client ID + secret, from techdirect.dell.com |
+| HP Inc. | Product Warranty API v2 | OAuth2 client ID + secret, from developers.hp.com |
+| HPE | Support Entitlement (warrantyCheck) | OAuth2 client ID + secret, issued against a support agreement |
+| Lenovo | Warranty & Contract v2.5 | A `ClientID` token from a Lenovo account representative |
+| Apple | GSX REST v2 | AASP/self-servicing agreement, client certificate, Sold-To/Ship-To, activation token |
+| Cisco | Support API SN2INFO v2 | OAuth2 client ID + secret, from apiconsole.cisco.com |
+| Fortinet | FortiCare Registration API v3 | A FortiCloud **IAM API user** (not a portal login) |
+| Juniper | Service Asset API v1.0 (`css-asset`) | API key + application id + customer source id, from Juniper onboarding |
+| Microsoft Surface | Surface API Management Service | Entra app in the Intune tenant + an API subscription key |
+| Pure Storage | Pure1 REST API, support contracts | Pure1 application id + an RSA private key |
+
+Every one of these requires an account with the vendor; none has an anonymous tier. Each is
+a separate switch on top of a master switch, and nothing is contacted until both are on.
+**Only the serial number leaves the server** — no hostname, no user, no entity, no instance
+URL. Requests go through GLPI's configured proxy.
+
+Dell, Cisco and Juniper batch (100, 75 and 50 serials per call), so a thousand-machine
+estate is a few dozen requests. Lookups run hourly from cron, bounded per run, with a
+per-vendor interval floor; a vendor that answers "wrong credentials" or "slow down" is
+dropped for the rest of the run rather than asked another ninety times.
+
+**Two of the ten answer about a fleet rather than a serial.** Microsoft and Pure Storage
+publish no per-device endpoint, so the whole tenant or organisation is fetched once per run
+and every asset is answered from that snapshot:
+
+- **Microsoft Surface** returns a CSV export of every Intune-enrolled Surface. The tenant
+  must be *enrolled for scanning* first — a state change inside your Microsoft tenant, so it
+  is a button on the settings page rather than something the cron does on its own, and the
+  first scan takes up to five business days. Microsoft refreshes the data biweekly, so
+  "Check now" re-reads the same export.
+- **Pure Storage matches on array name, not serial** — Pure1 publishes no serial number
+  anywhere in its public API. An asset is matched to the Pure1 array whose name or FQDN
+  equals its GLPI name, and the Warranty tab says so. Rename an array in one place and not
+  the other and it stops matching, which shows up as "not found" rather than a wrong date.
+
+**Vendors deliberately absent**, because they have no serial-number warranty API a plugin
+can call. Each was checked, not assumed:
+
+- **Arista Networks** — the only public API on `arista.com` is the software download service
+  (`custom_data/api`, as used by eos-downloader); CloudVision's APIs describe devices under
+  management, not support entitlement. Warranty is the support portal's serial page.
+- **Ubiquiti** — `api.ui.com` and the UniFi APIs return device inventory with no coverage
+  data; warranty runs through the RMA form at rma.ui.com, which wants proof of purchase
+  rather than a serial.
+- **Supermicro** — the serial-number warranty check is a web form; RMA is email.
+- **Zebra, APC/Schneider, Acer, ASUS, MSI, Dynabook/Toshiba, Fujitsu** — a web form in every
+  case. Scraping one would break silently and is not shipped here.
+- **Cisco Meraki** — excluded on purpose: Meraki serials are not in SN2INFO and would fail
+  on every access point, every night.
+
+Assets from any of those are recorded as *not applicable* rather than failing.
+
+### What lands where
+
+A machine routinely has several overlapping entitlements — a base warranty, a ProSupport or
+Care Pack extension, sometimes accidental-damage cover with its own clock. Infocom holds one
+span, so the **entitlement that ends last** is the one written; the full list is on the
+asset's *Warranty* tab, along with the service level, when it was last checked, and — the
+case that actually generates support questions — *why* there is no warranty. An empty
+Financial tab cannot tell "the vendor has no record of this serial" from "the credentials
+expired a fortnight ago", and those have very different answers.
+
+Warranty fields somebody typed in by hand are never overwritten unless an administrator
+explicitly allows it, and the purchase date and supplier are only ever filled in when empty.
+
+One GLPI quirk worth knowing, because it looks like an off-by-one here and is not:
+**GLPI computes the expiry two different ways.** The search option and the warranty-alert
+cron both use `DATE_ADD(warranty_date, INTERVAL warranty_duration MONTH)`, which lands
+exactly on the vendor's end date; the Financial tab subtracts a day, to show the last day
+still covered. The vendor's exact date is always in `warranty_info`.
+
+The engine is shared with [glpi-netscan](https://github.com/bijstaan/glpi-netscan), which
+does the same job for the switches, printers and UPSs its SNMP scanner finds. Both ship a
+complete copy so neither requires the other; in the monorepo `tools/sync-warranty.sh`
+projects one into the other, and everything genuinely per-plugin lives in
+`Warranty/Scope.php`.
+
+No glpi-ai tool is added for this on purpose: the data is in GLPI's native fields, which the
+assistant already reads, and a second source could only disagree with the first.
+
 ## Tests
 
 ```bash
 docker exec glpi-glpi-1 php /var/www/glpi/plugins/glpiosquery/tests/run-tests.php
+docker exec glpi-glpi-1 php /var/www/glpi/plugins/glpiosquery/tests/warranty.php
 ```
 
 67 dependency-free unit tests covering the EDID decoder, every osquery→GLPI unit
 conversion, the schema's enum/date constraints, the live-query SQL guard and the update
-rollout rings. Browser checks (console, autocomplete, per-computer tab, settings) live in
+rollout rings, plus 370 for the warranty lookup — all ten vendor clients against captured
+response shapes (asserting the *requests* too, since none of these APIs can be called from a
+test environment), vendor detection, failure classification and the projection onto GLPI's
+fields. Browser checks (console, autocomplete, per-computer tab, settings) live in
 `tests/browser/`.
 
 ```bash

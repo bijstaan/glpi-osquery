@@ -51,10 +51,141 @@ final class AiTools
             self::agents(),
             self::tables(),
             self::live(),
+            self::compliance(),
         ];
     }
 
     // --------------------------------------------------------------- agents
+
+    // ------------------------------------------------------------ compliance
+
+    private static function compliance(): Tool
+    {
+        return new Tool(
+            name: 'osquery_compliance',
+            description: 'Whether machines are actually encrypted, firewalled and running '
+                . 'antivirus, judged from what the agent last reported rather than from what '
+                . 'anybody configured. Give a machine for one verdict, or ask for the fleet. '
+                . 'Use it before answering a security questionnaire, when a customer asks '
+                . 'whether their laptops are encrypted, and after a loss or theft. Report '
+                . '"unknown" as unknown: a check that could not be evaluated is not a pass, '
+                . 'and this is the one place where saying so matters.',
+            schema: [
+                'type'       => 'object',
+                'properties' => [
+                    'agent'        => [
+                        'type'        => 'string',
+                        'description' => 'Hostname or agent id, from osquery_agents. Omit for '
+                            . 'the whole fleet.',
+                    ],
+                    'failing_only' => [
+                        'type'        => 'string',
+                        'enum'        => ['yes', 'no'],
+                        'description' => 'Only machines failing at least one check. Defaults '
+                            . 'to no.',
+                    ],
+                ],
+            ],
+            handler: [self::class, 'runCompliance'],
+            right: 'plugin_glpiosquery_agent',
+            source: 'glpiosquery',
+            pinned: false
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $arguments
+     * @return array<string,mixed>
+     */
+    public static function runCompliance(array $arguments = [], mixed $context = null): array
+    {
+        $wanted  = trim((string) ($arguments['agent'] ?? ''));
+        $failing = strtolower((string) ($arguments['failing_only'] ?? 'no')) === 'yes';
+
+        $machines = [];
+        $tally    = ['pass' => 0, 'fail' => 0, 'unknown' => 0];
+
+        // `Compliance::fleet()` is already restricted to the caller's entity
+        // scope, and evaluating one machine goes through the same rows —
+        // which is why the single-agent case filters that list rather than
+        // reading the agent table itself. One scope, one answer.
+        foreach (Compliance::fleet() as $row) {
+            $agent = $row['agent'];
+
+            if ($wanted !== '' && !self::matchesAgent($agent, $wanted)) {
+                continue;
+            }
+
+            $checks = [];
+            $worst  = Compliance::PASS;
+
+            foreach ($row['results'] as $key => $result) {
+                $state = (string) $result['state'];
+                $tally[$state] = ($tally[$state] ?? 0) + 1;
+
+                if ($state === Compliance::FAIL) {
+                    $worst = Compliance::FAIL;
+                } elseif ($state === Compliance::UNKNOWN && $worst !== Compliance::FAIL) {
+                    $worst = Compliance::UNKNOWN;
+                }
+
+                $checks[] = array_filter([
+                    'check'  => (string) (Compliance::checks()[$key]['label'] ?? $key),
+                    'state'  => $state,
+                    'detail' => trim((string) ($result['detail'] ?? '')),
+                ], static fn($v): bool => $v !== '');
+            }
+
+            if ($checks === []) {
+                // No check applies to this platform. Reported as unknown
+                // rather than dropped: "there is nothing we can check on
+                // Linux" and "Linux passed" are different sentences, and only
+                // one of them is true.
+                $worst = Compliance::UNKNOWN;
+            }
+
+            if ($failing && $worst !== Compliance::FAIL) {
+                continue;
+            }
+
+            $machines[] = array_filter([
+                'machine'  => (string) ($agent['name'] ?? ''),
+                'agent_id' => (int) ($agent['id'] ?? 0),
+                'platform' => (string) ($agent['platform'] ?? ''),
+                'last_seen' => (string) ($agent['last_seen'] ?? '') ?: null,
+                'verdict'  => $worst,
+                'checks'   => $checks,
+            ], static fn($v): bool => $v !== null && $v !== '');
+        }
+
+        if ($wanted !== '' && $machines === []) {
+            return ['error' => sprintf('No enrolled machine matching "%s" that you can see.', $wanted)];
+        }
+
+        return array_filter([
+            'machines' => array_slice($machines, 0, self::MAX_ROWS),
+            'checks_by_state' => $tally,
+            'note'     => $tally['unknown'] > 0
+                ? 'Some checks could not be evaluated — the agent has not reported the data '
+                    . 'they need. Those are unknown, not compliant, and must be said that way '
+                    . 'in any answer that reaches a customer.'
+                : ($machines === []
+                    ? 'Nothing is failing.'
+                    : 'Judged from the last snapshot each agent sent, so a machine that has '
+                        . 'been offline for a week is being reported as it was a week ago.'),
+        ], static fn($v): bool => $v !== null && $v !== []);
+    }
+
+    /** @param array<string,mixed> $agent */
+    private static function matchesAgent(array $agent, string $wanted): bool
+    {
+        if (ctype_digit($wanted) && (int) $agent['id'] === (int) $wanted) {
+            return true;
+        }
+
+        return stripos((string) ($agent['name'] ?? ''), $wanted) !== false
+            || stripos((string) ($agent['hostname'] ?? ''), $wanted) !== false;
+    }
 
     private static function agents(): Tool
     {
