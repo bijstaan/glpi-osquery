@@ -29,6 +29,17 @@ import (
 // code, and which no test can reach; doing it here means ordinary error
 // messages and logic that `go test` can exercise.
 
+// installTree normalises what the MSI handed us.
+//
+// [INSTALLFOLDER] formats with a trailing backslash and the .wxs appends a
+// period to keep that backslash from escaping the closing quote, so the value
+// arrives as `C:\Program Files\...\.`. Clean removes both, and a value typed
+// by hand with or without a trailing separator lands on the same string — which
+// matters because this path is compared, joined and handed to sc.exe.
+func installTree(root string) string {
+	return filepath.Clean(root)
+}
+
 func msiInstall(args []string) error {
 	fs := flag.NewFlagSet("msi-install", flag.ExitOnError)
 	installRoot := fs.String("install-root", config.DefaultInstallRoot(), "versioned install tree")
@@ -40,7 +51,7 @@ func msiInstall(args []string) error {
 		return err
 	}
 
-	root := strings.TrimRight(*installRoot, `\`)
+	root := installTree(*installRoot)
 	confPath := config.DefaultPath()
 
 	// The version directory is named for what this binary reports, which is also
@@ -129,7 +140,7 @@ func msiUninstall(args []string) error {
 
 	// os.Remove, never RemoveAll: the junction points at a real directory, and
 	// following it would delete what it names rather than the link itself.
-	link := filepath.Join(strings.TrimRight(*installRoot, `\`), "current")
+	link := filepath.Join(installTree(*installRoot), "current")
 	if err := os.Remove(link); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove the current junction: %w", err)
 	}
