@@ -66,7 +66,7 @@ final class AiTools
             description: 'Whether machines are actually encrypted, firewalled and running '
                 . 'antivirus, judged from what the agent last reported rather than from what '
                 . 'anybody configured. Give a machine for one verdict, or ask for the fleet. '
-                . 'Use it before answering a security questionnaire, when a customer asks '
+                . 'Use it before answering a security questionnaire, when somebody asks '
                 . 'whether their laptops are encrypted, and after a loss or theft. Report '
                 . '"unknown" as unknown: a check that could not be evaluated is not a pass, '
                 . 'and this is the one place where saying so matters.',
@@ -168,7 +168,7 @@ final class AiTools
             'note'     => $tally['unknown'] > 0
                 ? 'Some checks could not be evaluated — the agent has not reported the data '
                     . 'they need. Those are unknown, not compliant, and must be said that way '
-                    . 'in any answer that reaches a customer.'
+                    . 'in any answer that reaches an entity.'
                 : ($machines === []
                     ? 'Nothing is failing.'
                     : 'Judged from the last snapshot each agent sent, so a machine that has '
@@ -367,7 +367,7 @@ final class AiTools
                 . 'disk space and free space, memory and what is using it, running processes and '
                 . 'services, installed software and patches, logged-in users, startup items, '
                 . 'network connections, certificates, scheduled tasks. It reaches real endpoints '
-                . 'belonging to a customer, so ask when it will answer the question rather than '
+                . 'belonging to an entity, so ask when it will answer the question rather than '
                 . 'to see what turns up. Only SELECT is accepted. Machines that are asleep or '
                 . 'off the network will not answer, and the result says how many did not.',
             schema: [
@@ -425,7 +425,7 @@ final class AiTools
         }
 
         // Entity scoping in SQL, not in a filter afterwards: an agent belonging
-        // to another customer must not be reachable by guessing its id, and the
+        // to another entity must not be reachable by guessing its id, and the
         // cheapest place to enforce that is where the ids are resolved.
         $permitted = [];
         foreach (

@@ -207,7 +207,7 @@ expiry-alert cron, dashboards and CSV export keep working unchanged.
 | Apple | GSX REST v2 | AASP/self-servicing agreement, client certificate, Sold-To/Ship-To, activation token |
 | Cisco | Support API SN2INFO v2 | OAuth2 client ID + secret, from apiconsole.cisco.com |
 | Fortinet | FortiCare Registration API v3 | A FortiCloud **IAM API user**, not a portal login |
-| Juniper | Service Asset API v1.0 (`css-asset`) | API key + application id + customer source id |
+| Juniper | Service Asset API v1.0 (`css-asset`) | API key + application id + entity source id |
 | Microsoft Surface | Surface API Management Service | Entra app in the Intune tenant + an API subscription key |
 | Pure Storage | Pure1 REST API, support contracts | Pure1 application id + an RSA private key |
 
@@ -292,7 +292,7 @@ log under the caller's name.
 - **Only SELECT**, one statement, through the same rejector the console uses. A
   refusal comes back as the tool's result with the reason.
 - **Agent ids are resolved through the entity restriction in SQL**, so an agent
-  in another customer's entity cannot be reached by guessing its number.
+  in another entity's entity cannot be reached by guessing its number.
 - **Silence is reported.** A campaign is asynchronous, so the tool waits a
   bounded time and then says how many machines did not answer.
 

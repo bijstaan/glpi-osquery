@@ -24,7 +24,7 @@ use Ticket;
  *
  * Deliberately **off by default**: this captures a process list and the logged
  * in user without anyone asking, on every ticket. That is a reasonable thing
- * for an MSP to switch on knowingly and not a reasonable thing to start doing
+ * to switch on knowingly and not a reasonable thing to start doing
  * on an upgrade. The followup is private for the same reason — a process list
  * is for the technician, not for the requester.
  */
