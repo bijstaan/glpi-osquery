@@ -53,6 +53,7 @@ func main() {
 			return
 		case "run":
 			os.Args = append(os.Args[:1], os.Args[2:]...)
+			redirectServiceOutput()
 		default:
 			// `msi-install` and `msi-uninstall` are what the Windows installer
 			// calls. They live in the binary rather than as installer custom
@@ -124,6 +125,9 @@ func runInstall(args []string) error {
 
 	if err := os.MkdirAll(loaded.StateDir, 0o750); err != nil {
 		return err
+	}
+	if err := config.SecureDataRoot(); err != nil {
+		return fmt.Errorf("restrict access to the agent's data: %w", err)
 	}
 
 	log := newLogger("info")
@@ -198,6 +202,13 @@ func run() error {
 	}
 
 	log.Info("starting", "version", version.Version, "server", cfg.ServerURL)
+
+	// On every start, so a machine installed before this existed is repaired
+	// by its first update. A failure is logged rather than fatal: an agent
+	// that stops reporting protects nothing.
+	if err := config.SecureDataRoot(); err != nil {
+		log.Warn("could not restrict access to the agent's data", "error", err)
+	}
 
 	// Refuse to run alongside another agent on the same state directory. Both
 	// would drive their own osqueryd against one RocksDB, which is

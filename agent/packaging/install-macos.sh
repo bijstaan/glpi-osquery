@@ -22,9 +22,14 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 VERSION="$(cat "${HERE}/VERSION" 2>/dev/null || echo 0.0.0)"
 
 echo "==> installing version ${VERSION}"
-install -d "${ROOT}/versions/${VERSION}/bin"
+install -d "${ROOT}/versions/${VERSION}/bin" "${ROOT}/versions/${VERSION}/certs"
 cp "${HERE}/bin/"* "${ROOT}/versions/${VERSION}/bin/"
 chmod 0755 "${ROOT}/versions/${VERSION}/bin/"*
+# osqueryd's trust anchors. Without them it verifies GLPI's certificate against
+# nothing and enrolment fails with "certificate verify failed", while the
+# agent's own Go client — which reads the system keychain — enrols fine.
+cp "${HERE}/certs/certs.pem" "${ROOT}/versions/${VERSION}/certs/"
+chmod 0644 "${ROOT}/versions/${VERSION}/certs/certs.pem"
 printf '%s\n' "$VERSION" > "${ROOT}/versions/${VERSION}/VERSION"
 
 ln -sfn "${ROOT}/versions/${VERSION}" "${ROOT}/current.new"

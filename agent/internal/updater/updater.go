@@ -6,6 +6,7 @@ package updater
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -223,7 +225,7 @@ func (u *Updater) Check() (bool, error) {
 // safeVersion constrains a version string before it is used as a path segment.
 //
 // The version arrives in the server's update manifest, and apply joins it into
-// updates/agent-<v>.tar.gz and versions/<v>. A compromised — or simply buggy —
+// updates/agent-<v>.archive and versions/<v>. A compromised — or simply buggy —
 // server must not be able to stage a tree outside the install root by
 // publishing a release called "../../etc". filepath.Base is not enough on its
 // own here: it leaves ".." intact, so the pattern is anchored to a leading
@@ -241,7 +243,9 @@ func (u *Updater) apply(pkg client.Package) error {
 		return err
 	}
 
-	archivePath := filepath.Join(updatesDir, "agent-"+pkg.Version+".tar.gz")
+	// No extension on purpose: the Windows bundle is a zip and every other
+	// one a tar.gz, and extractArchive reads the format from the bytes.
+	archivePath := filepath.Join(updatesDir, "agent-"+pkg.Version+".archive")
 	defer os.Remove(archivePath)
 
 	if err := u.download(pkg, archivePath); err != nil {
@@ -267,7 +271,7 @@ func (u *Updater) apply(pkg client.Package) error {
 		return err
 	}
 
-	if err := extractTarGz(archivePath, staging); err != nil {
+	if err := extractArchive(archivePath, staging); err != nil {
 		_ = os.RemoveAll(staging)
 		return fmt.Errorf("extract: %w", err)
 	}
@@ -366,7 +370,10 @@ func (u *Updater) verifyPayload(root, expected string) error {
 	if err != nil {
 		return fmt.Errorf("missing %s: %w", binary, err)
 	}
-	if info.Mode()&0o111 == 0 {
+	// Windows has no execute bit — Go reports every regular file there as
+	// 0666 — so the check would refuse every Windows update ever staged. The
+	// run below is the real test on every platform anyway.
+	if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 		return fmt.Errorf("%s is not executable", binary)
 	}
 
@@ -405,6 +412,98 @@ func (u *Updater) pruneOldVersions(keep string) {
 		}
 		u.log.Info("removed old version", "version", name)
 	}
+}
+
+// extractArchive unpacks a published bundle, whichever of the two formats
+// build.sh produced it in: a zip for Windows, where tar is not a native format,
+// and a tar.gz everywhere else. Sniffed from the leading bytes rather than
+// trusted from the URL, because a package is published by URL and nothing
+// guarantees its name.
+func extractArchive(archive, dest string) error {
+	f, err := os.Open(archive)
+	if err != nil {
+		return err
+	}
+	magic := make([]byte, 4)
+	n, _ := io.ReadFull(f, magic)
+	f.Close()
+
+	switch {
+	case n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b:
+		return extractTarGz(archive, dest)
+	case n == 4 && string(magic) == "PK\x03\x04":
+		return extractZip(archive, dest)
+	default:
+		return fmt.Errorf("unrecognised archive format (expected tar.gz or zip)")
+	}
+}
+
+// extractZip is extractTarGz for the Windows bundle, with the same guards:
+// every entry is contained under dest, only regular files and directories are
+// written, and no file is group- or world-writable.
+func extractZip(archive, dest string) error {
+	zr, err := zip.OpenReader(archive)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+
+	root, err := filepath.Abs(dest)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range zr.File {
+		path, err := containedPath(root, entry.Name)
+		if err != nil {
+			return err
+		}
+
+		info := entry.FileInfo()
+		switch {
+		case info.IsDir():
+			if err := os.MkdirAll(path, 0o755); err != nil {
+				return err
+			}
+			continue
+		case !info.Mode().IsRegular():
+			// Symlinks and the rest, as in extractTarGz.
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+
+		// A zip written on Windows often carries no Unix mode at all.
+		mode := info.Mode().Perm() & 0o755
+		if mode == 0 {
+			mode = 0o644
+		}
+
+		in, err := entry.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+		if err != nil {
+			in.Close()
+			return err
+		}
+		_, copyErr := io.Copy(out, io.LimitReader(in, 1<<30))
+		in.Close()
+		if closeErr := out.Close(); copyErr == nil {
+			copyErr = closeErr
+		}
+		if copyErr != nil {
+			return copyErr
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // extractTarGz unpacks an archive, refusing entries that would escape the

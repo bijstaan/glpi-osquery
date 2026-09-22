@@ -15,6 +15,57 @@
         { "name": "preferred_mode", "type": "TEXT", "description": "Mode the kernel prefers, e.g. 5120x1440. Trusted over decoding the EDID, because a native timing may live in a DisplayID extension block." },
         { "name": "status", "type": "TEXT", "description": "Connector state as reported by the kernel: connected or disconnected" }
       ]
+    },
+    {
+      "name": "glpi_block_stack",
+      "description": "Linux block-device stack read from /sys/class/block, as lsblk sees it. Provided by the extension bundled with the GLPI osquery agent. Exists because osquery's disk_encryption leaves `encrypted` blank for every NVMe and device-mapper node, which is where a standard LVM or LUKS install keeps its root filesystem.",
+      "platforms": ["linux"],
+      "evented": false,
+      "extension": "glpi-edid",
+      "columns": [
+        { "name": "name", "type": "TEXT", "description": "Kernel device name, e.g. dm-0 or nvme0n1p3" },
+        { "name": "device", "type": "TEXT", "description": "Device node, e.g. /dev/dm-0" },
+        { "name": "dm_name", "type": "TEXT", "description": "Device-mapper name, e.g. ubuntu--vg-ubuntu--lv; mounted as /dev/mapper/<dm_name>" },
+        { "name": "dm_uuid", "type": "TEXT", "description": "Device-mapper UUID. CRYPT-LUKS2-… is a LUKS2 volume, LVM-… a logical volume" },
+        { "name": "kind", "type": "TEXT", "description": "crypt, lvm, physical or other" },
+        { "name": "parents", "type": "TEXT", "description": "Comma-separated devices immediately beneath this one" },
+        { "name": "encrypted", "type": "TEXT", "description": "1 if this device or anything beneath it is dm-crypt, 0 if the stack resolved with no crypt layer, empty if it could not be resolved" },
+        { "name": "crypt_device", "type": "TEXT", "description": "dm name of the crypt layer found beneath, if any" }
+      ]
+    },
+    {
+      "name": "glpi_battery",
+      "description": "Batteries read from /sys/class/power_supply, in GLPI's units. Provided by the extension bundled with the GLPI osquery agent, because osquery's battery table exists only on macOS and Windows. Peripheral batteries (mice, headsets) are excluded.",
+      "platforms": ["linux"],
+      "evented": false,
+      "extension": "glpi-edid",
+      "columns": [
+        { "name": "name", "type": "TEXT", "description": "Kernel name of the supply, e.g. BAT1" },
+        { "name": "manufacturer", "type": "TEXT", "description": "Battery manufacturer" },
+        { "name": "model", "type": "TEXT", "description": "Battery model name" },
+        { "name": "serial", "type": "TEXT", "description": "Battery serial number" },
+        { "name": "technology", "type": "TEXT", "description": "Chemistry, e.g. Li-ion" },
+        { "name": "status", "type": "TEXT", "description": "Charging, Discharging, Full or Not charging" },
+        { "name": "cycle_count", "type": "INTEGER", "description": "Charge cycles, where the firmware reports them" },
+        { "name": "capacity_percent", "type": "INTEGER", "description": "Current charge as a percentage" },
+        { "name": "design_capacity_mwh", "type": "INTEGER", "description": "Capacity when new, in mWh; converted from charge using the design voltage when the kernel reports µAh" },
+        { "name": "full_capacity_mwh", "type": "INTEGER", "description": "Capacity when fully charged today, in mWh" },
+        { "name": "voltage_mv", "type": "INTEGER", "description": "Design minimum voltage, in mV, or the present voltage when that is not reported" }
+      ]
+    },
+    {
+      "name": "glpi_chassis",
+      "description": "System chassis from DMI (/sys/class/dmi/id). Provided by the extension bundled with the GLPI osquery agent, because osquery's chassis_info exists only on Windows.",
+      "platforms": ["linux"],
+      "evented": false,
+      "extension": "glpi-edid",
+      "columns": [
+        { "name": "chassis_type", "type": "INTEGER", "description": "SMBIOS chassis type code, e.g. 10 for a notebook" },
+        { "name": "chassis_name", "type": "TEXT", "description": "The code's SMBIOS name, e.g. Notebook, Desktop, Rack Mount Chassis" },
+        { "name": "vendor", "type": "TEXT", "description": "Chassis vendor" },
+        { "name": "serial", "type": "TEXT", "description": "Chassis serial number (readable by root only)" },
+        { "name": "asset_tag", "type": "TEXT", "description": "Chassis asset tag" }
+      ]
     }
   ]
 }

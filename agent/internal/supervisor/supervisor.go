@@ -294,6 +294,22 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 
 	cmd := exec.CommandContext(ctx, s.cfg.OsquerydPath, "--flagfile="+s.cfg.FlagfilePath())
 
+	// CommandContext's default reaction to the context ending is SIGKILL, which
+	// takes out osqueryd's watchdog without letting it stop its worker or its
+	// extensions — and the agent's context ends on every shutdown and every
+	// self-update. Ask first, and kill only if osqueryd has not gone within
+	// the grace period. Windows has no interrupt to deliver to a process that
+	// is not in our console group, so there the kill is immediate; osquery's
+	// worker and extensions notice their parent has gone and exit by
+	// themselves, and waitForPidfile covers the overlap on the next start.
+	cmd.Cancel = func() error {
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
+	cmd.WaitDelay = stopGrace
+
 	// The environment is passed through unmodified on purpose. Setting
 	// OSQUERY_WORKER here (to stop osquery forking its own watchdog) makes
 	// osqueryd believe it *is* the watchdog's worker child — and a worker does
@@ -374,12 +390,20 @@ func (s *Supervisor) Stop() {
 		return
 	}
 
-	_ = cmd.Process.Signal(os.Interrupt)
+	// Unsupported on Windows (see runOnce): waiting out the grace period for
+	// a signal that was never delivered only delays the kill, and made every
+	// extension-change restart there take twenty seconds.
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		_ = cmd.Process.Kill()
+	}
 
 	select {
 	case <-done:
-	case <-time.After(20 * time.Second):
+	case <-time.After(stopGrace):
 		s.log.Warn("osqueryd did not stop in time, killing")
 		_ = cmd.Process.Kill()
 	}
 }
+
+// stopGrace is how long osqueryd gets to shut down cleanly before it is killed.
+const stopGrace = 20 * time.Second

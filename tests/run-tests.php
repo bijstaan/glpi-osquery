@@ -31,6 +31,7 @@ require_once __DIR__ . '/../src/Inventory/Edid.php';
 require_once __DIR__ . '/../src/Inventory/Assembler.php';
 require_once __DIR__ . '/../src/EnrollSecret.php';
 require_once __DIR__ . '/../src/QueryCatalog.php';
+require_once __DIR__ . '/../src/DefaultPacks.php';
 require_once __DIR__ . '/../src/AgentUpdate.php';
 require_once __DIR__ . '/../src/Compliance.php';
 require_once __DIR__ . '/../src/Node.php';
@@ -54,6 +55,7 @@ require_once __DIR__ . '/../src/Extension.php';
 
 use GlpiPlugin\Glpiosquery\AgentUpdate;
 use GlpiPlugin\Glpiosquery\Compliance;
+use GlpiPlugin\Glpiosquery\DefaultPacks;
 use GlpiPlugin\Glpiosquery\Extension;
 use GlpiPlugin\Glpiosquery\Node;
 use GlpiPlugin\Glpiosquery\TicketEvidence;
@@ -784,6 +786,312 @@ check('os version is not compared', $flags['os'] ?? true, false);
 check('uptime is not compared', $flags['uptime'] ?? true, false);
 check('memory is compared', $flags['memory'] ?? true, true);
 check('disk is compared', $flags['disk'] ?? true, true);
+
+// ------------------------------------------------------ volume encryption
+section('volume encryption');
+
+// GLPI reads encrypt_status as an exact string: "Yes", "Partially", or — for
+// everything else, empty included — not encrypted. So each of these is a
+// statement GLPI will act on.
+$win = fn(array $bitlocker) => assemble([
+    'inv_system_info'     => [['hostname' => 'unit-test']],
+    'inv_logical_drives'  => [['device_id' => 'C:', 'size' => '256000000000', 'free_space' => '100000000000',
+                               'file_system' => 'NTFS', 'boot_partition' => '1']],
+    'inv_bitlocker'       => [$bitlocker],
+])['drives'][0];
+
+$drive = $win(['drive_letter' => 'C:', 'protection_status' => '1', 'conversion_status' => '1',
+               'encryption_method' => 'XTS-AES-256', 'percentage_encrypted' => '100']);
+check('an encrypted volume says Yes', $drive['encrypt_status'] ?? '', 'Yes');
+check('with the tool named', $drive['encrypt_name'] ?? '', 'BitLocker');
+check('and the algorithm', $drive['encrypt_algo'] ?? '', 'XTS-AES-256');
+check('and the protection state', $drive['encrypt_type'] ?? '', 'Protection on');
+
+$drive = $win(['drive_letter' => 'C:', 'protection_status' => '0', 'conversion_status' => '2',
+               'encryption_method' => 'XTS-AES-256', 'percentage_encrypted' => '42']);
+check('a conversion in progress is Partially', $drive['encrypt_status'] ?? '', 'Partially');
+
+$drive = $win(['drive_letter' => 'C:', 'protection_status' => '0', 'conversion_status' => '0',
+               'encryption_method' => 'None', 'percentage_encrypted' => '0']);
+check('an unencrypted volume says No', $drive['encrypt_status'] ?? '', 'No');
+check("and 'None' is not reported as an algorithm", array_key_exists('encrypt_algo', $drive), false);
+
+// A suspended volume is still encrypted; GLPI has nowhere but encrypt_type for
+// the difference, and getting it wrong would hide a real exposure.
+$drive = $win(['drive_letter' => 'C:', 'protection_status' => '0', 'conversion_status' => '1',
+               'encryption_method' => 'XTS-AES-256', 'percentage_encrypted' => '100']);
+check('a suspended volume is still encrypted', $drive['encrypt_status'] ?? '', 'Yes');
+check('and says protection is off', $drive['encrypt_type'] ?? '', 'Protection off');
+
+// The letters have to line up or the fields land on the wrong volume.
+$content = assemble([
+    'inv_system_info'    => [['hostname' => 'unit-test']],
+    'inv_logical_drives' => [
+        ['device_id' => 'C:', 'size' => '256000000000', 'free_space' => '1', 'file_system' => 'NTFS'],
+        ['device_id' => 'D:', 'size' => '128000000000', 'free_space' => '1', 'file_system' => 'NTFS'],
+    ],
+    'inv_bitlocker'      => [['drive_letter' => 'C:', 'protection_status' => '1',
+                              'conversion_status' => '1', 'encryption_method' => 'AES-256']],
+]);
+check('only the matching volume is marked', [
+    $content['drives'][0]['encrypt_status'] ?? '-',
+    $content['drives'][1]['encrypt_status'] ?? '-',
+], ['Yes', '-']);
+
+// The trap the whole index exists to avoid: osquery leaves `encrypted` blank
+// for device-mapper and NVMe nodes, and GLPI reads a blank as "not encrypted".
+$content = assemble([
+    'inv_system_info'      => [['hostname' => 'unit-test']],
+    'inv_mounts'           => [['device' => '/dev/dm-0', 'path' => '/', 'type' => 'ext4',
+                                'blocks' => '1000000', 'blocks_size' => '4096', 'blocks_available' => '500000']],
+    'inv_disk_encryption'  => [['name' => '/dev/dm-0', 'encrypted' => '', 'type' => '']],
+]);
+check('an unreadable volume claims nothing',
+    array_key_exists('encrypt_status', $content['drives'][0]), false);
+
+$content = assemble([
+    'inv_system_info'      => [['hostname' => 'unit-test']],
+    'inv_mounts'           => [['device' => '/dev/disk1s1', 'path' => '/', 'type' => 'apfs',
+                                'blocks' => '1000000', 'blocks_size' => '4096', 'blocks_available' => '500000']],
+    'inv_disk_encryption'  => [['name' => '/dev/disk1s1', 'encrypted' => '1', 'type' => 'AES-XTS',
+                                'filevault_status' => 'on', 'encryption_status' => 'encrypted']],
+]);
+check('FileVault is named as the tool', $content['drives'][0]['encrypt_name'] ?? '', 'FileVault');
+check('and the volume reads as encrypted', $content['drives'][0]['encrypt_status'] ?? '', 'Yes');
+
+// ------------------------------------------------------ platform coverage
+section('platform coverage');
+
+// Every shipped query must name only tables that exist on each platform it is
+// served to. osquery refuses the whole query when a table is missing, so one
+// wrong platform list silently costs that platform a section of every
+// inventory — which is how Windows came to report no USB devices and Linux no
+// battery. Extension tables are exempt when the query is gated on them.
+$catalogue = [];
+foreach (QueryCatalog::load()['tables'] as $table) {
+    $catalogue[$table['name']] = $table['platforms'] ?? [];
+}
+$misplaced = [];
+foreach (DefaultPacks::packs() as $pack) {
+    foreach ($pack['queries'] as $q) {
+        $platforms = ($q['platform'] ?? 'all') === 'all' ? ['linux', 'darwin', 'windows'] : explode(',', $q['platform']);
+        preg_match_all('/\b(?:FROM|JOIN)\s+([a-z_][a-z0-9_]*)/i', $q['sql'], $m);
+        foreach (array_unique($m[1]) as $table) {
+            if ($table === 'pragma_table_info' || ($q['requires_table'] ?? null) === $table) {
+                continue;
+            }
+            foreach ($platforms as $platform) {
+                if (!in_array($platform, $catalogue[$table] ?? [], true)) {
+                    $misplaced[] = "{$q['name']}: {$table} on {$platform}";
+                }
+            }
+        }
+    }
+}
+check('every shipped query reads tables its platforms have', $misplaced, []);
+
+// Each platform has to reach every section it can; this is the list the
+// packs promise, so a query dropped or re-platformed shows up here.
+$sections = ['linux' => [], 'darwin' => [], 'windows' => []];
+foreach (DefaultPacks::packs()[0]['queries'] as $q) {
+    $platforms = ($q['platform'] ?? 'all') === 'all' ? array_keys($sections) : explode(',', $q['platform']);
+    foreach ($platforms as $platform) {
+        if (!empty($q['section'])) {
+            $sections[$platform][$q['section']] = true;
+        }
+    }
+}
+$everywhere = ['hardware', 'bios', 'operatingsystem', 'cpus', 'memories', 'storages', 'drives', 'networks',
+               'softwares', 'local_users', 'local_groups', 'users', 'batteries', 'monitors', 'controllers'];
+foreach ($sections as $platform => $have) {
+    check("$platform reaches every common section", array_values(array_diff($everywhere, array_keys($have))), []);
+}
+
+// Windows fills `speed` in bits per second; GLPI stores Mbit/s. An adapter
+// with no link reports 2^63-1, which is not a speed at all.
+$nets = assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_interface_details_windows' => [
+        ['interface' => '13', 'mac' => '3c:e9:f7:11:22:33', 'speed' => '1000000000', 'link_speed' => '',
+         'connection_id' => 'Ethernet', 'physical_adapter' => '1', 'enabled' => '1'],
+        ['interface' => '7', 'mac' => '3c:e9:f7:11:22:44', 'speed' => '9223372036854775807', 'link_speed' => '',
+         'connection_id' => 'Wi-Fi', 'physical_adapter' => '1', 'enabled' => '0'],
+    ],
+])['networks'];
+check('a gigabit Windows adapter is 1000 Mbit/s', $nets[0]['speed'] ?? null, '1000');
+check('an adapter with no link has no speed', array_key_exists('speed', $nets[1]), false);
+$nets = assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_interface_details' => [['interface' => 'eth0', 'mac' => '00:11:22:33:44:55', 'link_speed' => '2500', 'flags' => '1']],
+])['networks'];
+check('POSIX link_speed is already Mbit/s', $nets[0]['speed'] ?? null, '2500');
+
+// Battery capacity: osquery's mAh against GLPI's mWh. Windows mAh were made by
+// osquery dividing Windows' mWh by an assumed 12 V; macOS mAh are real.
+$bat = fn(string $platform, array $row) => document(
+    ['inv_system_info' => [['hostname' => 'unit-test']], 'inv_battery' => [$row]],
+    ['platform' => $platform]
+)['content']['batteries'][0];
+$b = $bat('windows', ['model' => 'DELL VJF3W', 'designed_capacity' => '4750', 'max_capacity' => '4300', 'voltage' => '12960']);
+check('Windows capacity is multiplied back by 12 V', [$b['capacity'] ?? null, $b['real_capacity'] ?? null], [57000, 51600]);
+$b = $bat('darwin', ['model' => 'bq40z651', 'designed_capacity' => '4382', 'max_capacity' => '4100', 'voltage' => '12780']);
+check('macOS capacity is mAh times the pack voltage', $b['capacity'] ?? null, 56002);
+$b = $bat('darwin', ['model' => 'bq40z651', 'designed_capacity' => '4382', 'voltage' => '']);
+check('with no voltage the capacity is omitted, not guessed', array_key_exists('capacity', $b), false);
+$b = assemble([
+    'inv_system_info'   => [['hostname' => 'unit-test']],
+    'inv_battery_linux' => [['name' => 'BAT1', 'model' => 'FRANGWA', 'technology' => 'Li-ion',
+                             'design_capacity_mwh' => '60604', 'full_capacity_mwh' => '56502', 'voltage_mv' => '15480']],
+])['batteries'][0];
+check('Linux battery arrives in GLPI units', [$b['name'], $b['capacity'], $b['real_capacity'], $b['chemistry']],
+      ['FRANGWA', 60604, 56502, 'Li-ion']);
+
+// Chassis type is GLPI's computer type, and without one GLPI uses the
+// motherboard model — a Framework laptop became a "FRANMDCP07".
+$chassis = fn(array $snaps) => assemble(['inv_system_info' => [['hostname' => 'unit-test']]] + $snaps)['hardware']['chassis_type'] ?? '';
+check('Windows: the enclosure, not the dock', $chassis(['inv_chassis_info' => [['chassis_types' => 'Notebook,Docking Station']]]), 'Notebook');
+check('Linux: from DMI via the extension', $chassis(['inv_chassis_linux' => [['chassis_type' => '10', 'chassis_name' => 'Notebook']]]), 'Notebook');
+check('SMBIOS "Other" is not a type', $chassis(['inv_chassis_linux' => [['chassis_type' => '1', 'chassis_name' => 'Other']]]), '');
+check("osquery's unnamed code is not a type", $chassis(['inv_chassis_info' => [['chassis_types' => 'Unknown (37)']]]), '');
+$profiler = fn(string $type, array $items) => ['data_type' => $type, 'value' => json_encode($items)];
+check('macOS: from the model name', $chassis(['inv_system_profiler' => [
+    $profiler('SPHardwareDataType', [['machine_name' => 'MacBook Pro', 'machine_model' => 'Mac15,3']])]]), 'Laptop');
+check('macOS: a Mac mini', $chassis(['inv_system_profiler' => [
+    $profiler('SPHardwareDataType', [['machine_name' => 'Mac mini']])]]), 'Mini PC');
+
+// Windows naming: GLPI names the OS after full_name, and os_version's version
+// is the kernel build, so leaving it in made every cumulative update a new OS.
+$os = document([
+    'inv_system_info'     => [['hostname' => 'unit-test']],
+    'inv_os_version'      => [['name' => 'Microsoft Windows 11 Pro', 'version' => '10.0.22631', 'platform' => 'windows', 'arch' => '64-bit']],
+    'inv_kernel_info'     => [['version' => '10.0.22621.3155']],
+    'inv_windows_version' => [['name' => 'DisplayVersion', 'data' => '23H2']],
+])['content']['operatingsystem'];
+check('Windows OS name carries no build', $os['full_name'] ?? '', 'Microsoft Windows 11 Pro');
+check('the release is the version', $os['version'] ?? '', '23H2');
+check('and the build stays as the kernel version', $os['kernel_version'] ?? '', '10.0.22621.3155');
+$os = assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_os_version'  => [['name' => 'Ubuntu', 'version' => '24.04.1 LTS (Noble Numbat)', 'platform' => 'ubuntu']],
+])['operatingsystem'];
+check('Linux naming is unchanged', $os['full_name'] ?? '', 'Ubuntu 24.04.1 LTS (Noble Numbat)');
+
+check('Windows domain becomes the workgroup', assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_ntdomains'   => [['domain_name' => 'CORP']],
+])['hardware']['workgroup'] ?? '', 'CORP');
+
+// macOS: APFS containers and disk images are whole disks to osquery, and the
+// system volumes under /System/Volumes each report the whole container.
+$mac = assemble([
+    'inv_system_info'   => [['hostname' => 'unit-test']],
+    'inv_block_devices' => [
+        ['name' => '/dev/disk0', 'parent' => '', 'model' => 'APPLE SSD AP0512Z', 'size' => '122138133', 'block_size' => '4096', 'label' => 'APPLE SSD AP0512Z Media'],
+        ['name' => '/dev/disk3', 'parent' => '', 'model' => 'APPLE SSD AP0512Z', 'size' => '120699497', 'block_size' => '4096', 'label' => 'AppleAPFSMedia'],
+        ['name' => '/dev/disk4', 'parent' => '', 'model' => 'Disk Image', 'size' => '51200', 'block_size' => '4096', 'label' => 'Apple UDIF Media'],
+    ],
+    'inv_mounts' => [
+        ['device' => '/dev/disk3s1s1', 'path' => '/', 'type' => 'apfs', 'blocks' => '1000', 'blocks_size' => '4096', 'blocks_available' => '10'],
+        ['device' => '/dev/disk3s6', 'path' => '/System/Volumes/VM', 'type' => 'apfs', 'blocks' => '1000', 'blocks_size' => '4096', 'blocks_available' => '10'],
+        ['device' => '/dev/disk3s5', 'path' => '/System/Volumes/Data', 'type' => 'apfs', 'blocks' => '1000', 'blocks_size' => '4096', 'blocks_available' => '10'],
+    ],
+]);
+check('only the physical SSD is a disk', array_column($mac['storages'], 'name'), ['/dev/disk0']);
+check('only the startup and Data volumes are drives', array_column($mac['drives'], 'type'), ['/', '/System/Volumes/Data']);
+
+// Apple silicon has no SMBIOS, so memory_devices is empty and memory comes
+// from system_profiler as one package.
+$mem = assemble([
+    'inv_system_info'     => [['hostname' => 'unit-test']],
+    'inv_system_profiler' => [$profiler('SPMemoryDataType', [['_name' => 'Memory', 'SPMemoryDataType' => '16 GB', 'dimm_type' => 'LPDDR5', 'dimm_manufacturer' => 'Hynix']])],
+])['memories'] ?? [];
+check('Apple silicon memory is reported', [$mem[0]['capacity'] ?? 0, $mem[0]['type'] ?? ''], [16384, 'LPDDR5']);
+$mem = assemble([
+    'inv_system_info'     => [['hostname' => 'unit-test']],
+    'inv_memory_devices'  => [['size' => '8192', 'device_locator' => 'DIMM0']],
+    'inv_system_profiler' => [$profiler('SPMemoryDataType', [['SPMemoryDataType' => '16 GB']])],
+])['memories'];
+check('SMBIOS wins where there is one', array_column($mem, 'capacity'), [8192]);
+
+$gpu = assemble([
+    'inv_system_info'     => [['hostname' => 'unit-test']],
+    'inv_system_profiler' => [$profiler('SPDisplaysDataType', [['_name' => 'Intel Iris Plus Graphics', 'sppci_model' => 'Intel Iris Plus Graphics',
+        'spdisplays_vram_shared' => '1536 MB', 'spdisplays_ndrvs' => [['_spdisplays_pixels' => '2560 x 1600']]]])],
+])['videos'][0];
+check('macOS GPU with shared memory and resolution', [$gpu['name'], $gpu['memory'] ?? 0, $gpu['resolution'] ?? ''],
+      ['Intel Iris Plus Graphics', 1536, '2560x1600']);
+
+// Linux graphics and audio are PCI functions.
+$pci = assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_pci_devices' => [
+        ['model' => 'Phoenix1', 'vendor' => 'AMD', 'pci_class' => 'Display controller', 'pci_subclass' => 'VGA compatible controller', 'pci_slot' => '0000:c1:00.0'],
+        ['model' => 'Ryzen HD Audio Controller', 'vendor' => 'AMD', 'pci_class' => 'Multimedia controller', 'pci_subclass' => 'Audio device'],
+        ['model' => 'FCH SMBus Controller', 'vendor' => 'AMD', 'pci_class' => 'Serial bus controller', 'pci_subclass' => 'SMBus'],
+    ],
+]);
+check('Linux GPU', array_column($pci['videos'], 'name'), ['Phoenix1']);
+check('Linux sound card', array_column($pci['sounds'], 'name'), ['Ryzen HD Audio Controller']);
+
+// Windows: USB devices from the driver list, parents only, with a serial only
+// where Windows did not have to invent the instance id.
+$win = assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_drivers'     => [
+        ['device_id' => 'USB\VID_046D&PID_C52B\5&2A1B3C&0&3', 'device_name' => 'USB Composite Device', 'class' => 'USB'],
+        ['device_id' => 'USB\VID_046D&PID_C52B&MI_00\6&1234&0&0000', 'device_name' => 'USB Input Device', 'class' => 'HIDClass'],
+        ['device_id' => 'USB\VID_0BDA&PID_5634\200901010001', 'device_name' => 'Integrated Webcam', 'class' => 'Camera'],
+        ['device_id' => 'USB\ROOT_HUB30\4&1F2E3D&0&0', 'device_name' => 'USB Root Hub (USB 3.0)', 'class' => 'USB'],
+        ['device_id' => 'HDAUDIO\FUNC_01&VEN_10EC&DEV_0257', 'device_name' => 'Realtek(R) Audio', 'class' => 'MEDIA'],
+    ],
+]);
+check('Windows USB devices, interfaces and hubs excluded', array_map(
+    fn($u) => [$u['vendorid'], $u['productid'], $u['serial'] ?? ''],
+    $win['usbdevices']
+), [['046d', 'c52b', ''], ['0bda', '5634', '200901010001']]);
+check('Windows sound card', array_column($win['sounds'], 'name'), ['Realtek(R) Audio']);
+
+$av = assemble([
+    'inv_system_info'       => [['hostname' => 'unit-test']],
+    'inv_security_products' => [
+        ['type' => 'Antivirus', 'name' => 'Microsoft Defender Antivirus', 'state' => 'Snoozed', 'signatures_up_to_date' => '0'],
+        ['type' => 'Firewall', 'name' => 'Windows Firewall', 'state' => 'On', 'signatures_up_to_date' => ''],
+    ],
+])['antivirus'];
+check('antivirus only, and a snoozed one is not enabled', $av,
+      [['name' => 'Microsoft Defender Antivirus', 'enabled' => false, 'uptodate' => false]]);
+
+// Linux users: logged_in_users is empty under systemd, so the session manager
+// is what says who is there.
+check('a Linux session user is reported', assemble([
+    'inv_system_info'     => [['hostname' => 'unit-test']],
+    'inv_logged_in_users' => [],
+    'inv_session_users'   => [['user' => 'matthew']],
+])['users'], [['login' => 'matthew']]);
+
+// Linux encryption from the block stack, matched through either name mounts
+// may use for a device-mapper volume.
+$stack = [
+    ['name' => 'dm-0', 'device' => '/dev/dm-0', 'dm_name' => 'vg-root', 'dm_uuid' => 'LVM-abc', 'kind' => 'lvm', 'encrypted' => '1', 'crypt_device' => 'luks-1234'],
+    ['name' => 'dm-1', 'device' => '/dev/dm-1', 'dm_name' => 'luks-1234', 'dm_uuid' => 'CRYPT-LUKS2-1234-luks-1234', 'kind' => 'crypt', 'encrypted' => '1', 'crypt_device' => 'luks-1234'],
+    ['name' => 'sda1', 'device' => '/dev/sda1', 'dm_name' => '', 'dm_uuid' => '', 'kind' => 'physical', 'encrypted' => '0', 'crypt_device' => ''],
+    ['name' => 'dm-2', 'device' => '/dev/dm-2', 'dm_name' => 'odd', 'dm_uuid' => 'LVM-x', 'kind' => 'lvm', 'encrypted' => '', 'crypt_device' => ''],
+];
+$mount = fn(string $device, string $alias, string $path) => ['device' => $device, 'device_alias' => $alias, 'path' => $path,
+    'type' => 'ext4', 'blocks' => '1000', 'blocks_size' => '4096', 'blocks_available' => '10'];
+$drives = assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_mounts'      => [$mount('/dev/mapper/vg-root', '/dev/dm-0', '/'), $mount('/dev/sda1', '/dev/sda1', '/boot'),
+                          $mount('/dev/mapper/odd', '/dev/dm-2', '/srv')],
+    'inv_block_stack' => $stack,
+])['drives'];
+check('LVM on LUKS is encrypted, and says LUKS2', [$drives[0]['encrypt_status'] ?? '', $drives[0]['encrypt_name'] ?? ''], ['Yes', 'LUKS2']);
+check('a plain partition is a definite no', $drives[1]['encrypt_status'] ?? '', 'No');
+check('an unresolved stack claims nothing', array_key_exists('encrypt_status', $drives[2]), false);
+
+// And the Linux account boundary, as the pack's SQL applies it.
+$linux_users = array_values(array_filter(DefaultPacks::packs()[0]['queries'], fn($q) => $q['name'] === 'inv_users_linux'));
+check('Linux users skip the 9xx system range and nobody', str_contains($linux_users[0]['sql'] ?? '', 'uid >= 1000 AND uid < 60000'), true);
 
 // ------------------------------------------------------- Windows adapters
 section('Windows adapters');

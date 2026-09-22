@@ -284,6 +284,47 @@ final class DefaultPacks
 
             // ----------------------------------------------------- network
             [
+                'name'    => 'inv_bitlocker',
+                'section' => 'drives',
+                'platform' => 'windows',
+                // Collected again here rather than read from security-posture,
+                // which says on its own tin that it is not part of the
+                // inventory document — and which an administrator may disable
+                // without expecting the volumes to stop reporting whether they
+                // are encrypted. bitlocker_info is a handful of rows.
+                'sql'     => 'SELECT device_id, drive_letter, protection_status, conversion_status, '
+                           . 'encryption_method, percentage_encrypted FROM bitlocker_info;',
+                'interval' => $hour,
+                'description' => 'Fills the encryption fields on each Windows volume.',
+            ],
+            [
+                'name'    => 'inv_disk_encryption',
+                'section' => 'drives',
+                // macOS only. On Linux disk_encryption leaves `encrypted` blank
+                // for every NVMe and device-mapper node — measured on a stock
+                // Ubuntu install, it answered for none of the mounted volumes —
+                // and names them /dev/dm-N where mounts says /dev/mapper/…, so
+                // it could not be matched even when it did answer. Linux reads
+                // inv_block_stack instead.
+                'platform' => 'darwin',
+                'sql'     => 'SELECT name, uuid, encrypted, type, encryption_status, filevault_status '
+                           . 'FROM disk_encryption;',
+                'interval' => $hour,
+                'description' => 'Fills the encryption fields on each macOS volume, FileVault included.',
+            ],
+            [
+                'name'    => 'inv_block_stack',
+                'section' => 'drives',
+                'platform' => 'linux',
+                'requires_table' => 'glpi_block_stack',
+                'sql'     => 'SELECT name, device, dm_name, dm_uuid, kind, encrypted, crypt_device '
+                           . 'FROM glpi_block_stack;',
+                'interval' => $hour,
+                'description' => 'Fills the encryption fields on each Linux volume by walking the '
+                               . 'device-mapper stack, so LUKS beneath LVM is found. Requires the '
+                               . 'extension bundled with the agent.',
+            ],
+            [
                 'name'    => 'inv_interface_details',
                 'section' => 'networks',
                 'platform' => 'linux,darwin',
@@ -407,11 +448,26 @@ final class DefaultPacks
             [
                 'name'    => 'inv_users',
                 'section' => 'local_users',
-                'platform' => 'linux,darwin',
+                'platform' => 'darwin',
                 'sql'     => 'SELECT uid, gid, username, description, directory, shell, uuid '
                            . 'FROM users WHERE uid >= 500 OR uid = 0;',
                 'interval' => $hour,
                 'description' => 'Real accounts: root plus non-system users.',
+            ],
+            [
+                'name'    => 'inv_users_linux',
+                'section' => 'local_users',
+                'platform' => 'linux',
+                // 500 is the macOS boundary, not the Linux one. Current distros
+                // allocate system accounts from 999 downwards — systemd-network,
+                // polkitd, fwupd-refresh, pipewire — and a stock Ubuntu desktop
+                // reported thirteen of them beside its one person. Debian and
+                // Red Hat alike start people at 1000; 60000 and up is nobody
+                // (65534) and the packaged high ids such as libvirt-qemu.
+                'sql'     => 'SELECT uid, gid, username, description, directory, shell, uuid '
+                           . 'FROM users WHERE uid = 0 OR (uid >= 1000 AND uid < 60000);',
+                'interval' => $hour,
+                'description' => 'Linux equivalent of inv_users: root plus the accounts people log in with.',
             ],
             [
                 'name'    => 'inv_users_windows',
@@ -439,7 +495,16 @@ final class DefaultPacks
             [
                 'name'    => 'inv_groups',
                 'section' => 'local_groups',
+                'platform' => 'darwin,windows',
                 'sql'     => 'SELECT gid, groupname, comment FROM groups WHERE gid >= 500 OR gid = 0;',
+                'interval' => $hour,
+            ],
+            [
+                'name'    => 'inv_groups_linux',
+                'section' => 'local_groups',
+                'platform' => 'linux',
+                // The same boundary as inv_users_linux, for the same reason.
+                'sql'     => 'SELECT gid, groupname, comment FROM groups WHERE gid = 0 OR (gid >= 1000 AND gid < 60000);',
                 'interval' => $hour,
             ],
             [
@@ -464,6 +529,23 @@ final class DefaultPacks
 
             // ------------------------------------------------- peripherals
             [
+                'name'    => 'inv_session_users',
+                'section' => 'users',
+                'platform' => 'linux',
+                // logged_in_users reads utmp, which systemd-logind and Wayland
+                // sessions do not write: on a stock Ubuntu desktop it returns no
+                // rows with the owner sitting at the machine, and the asset is
+                // attached to nobody. What every logind session does start is
+                // that user's own service manager, `systemd --user`, so its
+                // owner is the person logged in — console, graphical or SSH.
+                // Service accounts that merely own processes do not get one.
+                'sql'     => 'SELECT DISTINCT u.username AS user FROM processes p '
+                           . 'JOIN users u ON u.uid = p.uid '
+                           . "WHERE p.name = 'systemd' AND p.uid >= 1000 AND p.uid < 60000;",
+                'interval' => $hour,
+                'description' => 'Who is logged in on Linux, where logged_in_users is empty under systemd.',
+            ],
+            [
                 'name'    => 'inv_battery',
                 'section' => 'batteries',
                 'platform' => 'darwin,windows',
@@ -471,6 +553,18 @@ final class DefaultPacks
                            . 'max_capacity, voltage, chemistry, cycle_count, health, manufacture_date '
                            . 'FROM battery;',
                 'interval' => $day,
+            ],
+            [
+                'name'    => 'inv_battery_linux',
+                'section' => 'batteries',
+                'platform' => 'linux',
+                'requires_table' => 'glpi_battery',
+                'sql'     => 'SELECT name, manufacturer, model, serial, technology, cycle_count, '
+                           . 'design_capacity_mwh, full_capacity_mwh, voltage_mv '
+                           . 'FROM glpi_battery;',
+                'interval' => $day,
+                'description' => 'osquery has no battery table on Linux; read from /sys/class/power_supply '
+                               . 'by the extension bundled with the agent.',
             ],
             [
                 'name'    => 'inv_connected_displays',
@@ -513,6 +607,69 @@ final class DefaultPacks
                 'interval' => $day,
                 'description' => 'Chassis type (laptop / desktop / server), and a serial fallback when '
                                . 'system_info does not carry one.',
+            ],
+            [
+                'name'    => 'inv_chassis_linux',
+                'section' => 'hardware',
+                'platform' => 'linux',
+                'requires_table' => 'glpi_chassis',
+                'sql'     => 'SELECT chassis_type, chassis_name, vendor, asset_tag FROM glpi_chassis;',
+                'interval' => $day,
+                // Without a chassis type GLPI falls back to the motherboard
+                // model for the computer type, so a Framework laptop was typed
+                // "FRANMDCP07".
+                'description' => 'Chassis type (laptop / desktop / server) from DMI, which osquery does not '
+                               . 'expose on Linux. Requires the extension bundled with the agent.',
+            ],
+            [
+                'name'    => 'inv_system_profiler',
+                'section' => 'hardware',
+                'platform' => 'darwin',
+                // The value column is system_profiler's `_items` array as JSON —
+                // the same thing `system_profiler -json <type>` prints under the
+                // type's key. Each is read for what osquery has no table for on
+                // a Mac: the model name that says what the chassis is, the GPU,
+                // and memory on Apple silicon, which has no SMBIOS and so leaves
+                // memory_devices empty.
+                'sql'     => 'SELECT data_type, value FROM system_profiler '
+                           . "WHERE data_type IN ('SPHardwareDataType', 'SPDisplaysDataType', 'SPMemoryDataType');",
+                'interval' => $day,
+                'description' => 'Chassis, graphics and Apple silicon memory, from system_profiler.',
+            ],
+            [
+                'name'    => 'inv_windows_version',
+                'section' => 'operatingsystem',
+                'platform' => 'windows',
+                // os_version names the release by its kernel build and nothing
+                // else, so every cumulative update would become a new operating
+                // system in GLPI. The marketing version (23H2), the product id
+                // and the registered owner are where Windows keeps them.
+                'sql'     => 'SELECT name, data FROM registry '
+                           . "WHERE key = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' "
+                           . "AND name IN ('DisplayVersion', 'ReleaseId', 'ProductId', 'RegisteredOwner', "
+                           . "'RegisteredOrganization', 'EditionID');",
+                'interval' => $day,
+                'description' => 'Windows version name (e.g. 23H2), product id and registered owner.',
+            ],
+            [
+                'name'    => 'inv_ntdomains',
+                'section' => 'hardware',
+                'platform' => 'windows',
+                'sql'     => "SELECT domain_name, dns_forest_name FROM ntdomains WHERE domain_name != '';",
+                'interval' => $day,
+                'description' => 'The Active Directory domain, which GLPI records as the computer\'s domain.',
+            ],
+            [
+                'name'    => 'inv_security_products',
+                'section' => 'antivirus',
+                'platform' => 'windows',
+                // Collected here as well as in security-posture for the reason
+                // inv_bitlocker is: that pack is not part of the inventory and
+                // may be switched off. Windows Security Center does not exist on
+                // Windows Server, where this returns nothing.
+                'sql'     => 'SELECT type, name, state, signatures_up_to_date FROM windows_security_products;',
+                'interval' => $hour,
+                'description' => 'Antivirus products registered with Windows Security Center.',
             ],
             [
                 'name'    => 'inv_logon_sessions',

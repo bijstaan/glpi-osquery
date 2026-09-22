@@ -611,6 +611,46 @@ function plugin_glpiosquery_migrate()
         ]
     );
 
+    // inv_users and inv_groups lose Linux, where the 500 boundary they filter
+    // on is the macOS one: current distros allocate system accounts downwards
+    // from 999, so a stock Ubuntu desktop reported systemd-network, polkitd and
+    // a dozen more as local users. inv_users_linux and inv_groups_linux replace
+    // them there and are added by the seeding pass. Matched on the shipped SQL
+    // and platform, so an edited query is left as its operator set it.
+    $DB->update(
+        'glpi_plugin_glpiosquery_queries',
+        ['platform' => 'darwin'],
+        [
+            'name'      => 'inv_users',
+            'platform'  => 'linux,darwin',
+            'sql_query' => 'SELECT uid, gid, username, description, directory, shell, uuid '
+                         . 'FROM users WHERE uid >= 500 OR uid = 0;',
+        ]
+    );
+    $DB->update(
+        'glpi_plugin_glpiosquery_queries',
+        ['platform' => 'darwin,windows'],
+        [
+            'name'      => 'inv_groups',
+            'platform'  => 'all',
+            'sql_query' => 'SELECT gid, groupname, comment FROM groups WHERE gid >= 500 OR gid = 0;',
+        ]
+    );
+
+    // inv_disk_encryption briefly shipped for Linux too, where it answers for
+    // none of the volumes that matter and names the rest differently from
+    // mounts; inv_block_stack covers Linux instead.
+    $DB->update(
+        'glpi_plugin_glpiosquery_queries',
+        ['platform' => 'darwin'],
+        [
+            'name'      => 'inv_disk_encryption',
+            'platform'  => 'linux,darwin',
+            'sql_query' => 'SELECT name, uuid, encrypted, type, encryption_status, filevault_status '
+                         . 'FROM disk_encryption;',
+        ]
+    );
+
     // Four shipped saved queries gained Windows and macOS siblings, so the
     // bare names they had became ambiguous — "Connected monitors" now means one
     // of three statements. Renamed rather than left alone because the old name

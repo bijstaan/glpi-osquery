@@ -5,6 +5,7 @@ package updater
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"os"
@@ -241,5 +242,96 @@ func TestExtractTarGzOrdinaryPackage(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join(dest, "share", "notes.txt"))
 	if err != nil || string(body) != "notes" {
 		t.Fatalf("nested file wrong: %q %v", body, err)
+	}
+}
+
+// zipFile writes a zip holding the given entries; a name ending in "/" is a
+// directory. Written the way Windows' own tools write one — no Unix modes —
+// because that is what build.sh's Windows bundles look like once re-zipped.
+func zipFile(t *testing.T, entries map[string]string) string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range entries {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasSuffix(name, "/") {
+			if _, err := w.Write([]byte(body)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "bundle.zip")
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	return path
+}
+
+// The Windows bundle is a zip, and self-update read only tar.gz, so every
+// Windows update failed at "gzip: invalid header" before anything was staged.
+func TestExtractArchiveReadsTheWindowsZip(t *testing.T) {
+	archive := zipFile(t, map[string]string{
+		"bin/":                       "",
+		"bin/glpi-osquery-agent.exe": "MZbinary",
+		"certs/certs.pem":            "-----BEGIN CERTIFICATE-----",
+	})
+
+	dest := t.TempDir()
+	if err := extractArchive(archive, dest); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	for _, want := range []string{"bin/glpi-osquery-agent.exe", "certs/certs.pem"} {
+		if _, err := os.Stat(filepath.Join(dest, filepath.FromSlash(want))); err != nil {
+			t.Errorf("%s missing: %v", want, err)
+		}
+	}
+}
+
+func TestExtractArchiveStillReadsTarGz(t *testing.T) {
+	archive := tarGz(t, []tar.Header{
+		{Name: "bin/glpi-osquery-agent", Typeflag: tar.TypeReg, Mode: 0o755},
+	}, map[string]string{"bin/glpi-osquery-agent": "binary"})
+
+	dest := t.TempDir()
+	if err := extractArchive(archive, dest); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "bin", "glpi-osquery-agent")); err != nil {
+		t.Fatalf("binary missing: %v", err)
+	}
+}
+
+func TestExtractArchiveRefusesOtherFormats(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bundle")
+	if err := os.WriteFile(path, []byte("<html>404</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractArchive(path, t.TempDir()); err == nil {
+		t.Fatal("an error page was accepted as a package")
+	}
+}
+
+// Zip-slip: the same containment as tar, through the zip path.
+func TestExtractZipRefusesEscape(t *testing.T) {
+	parent := t.TempDir()
+	dest := filepath.Join(parent, "stage")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	archive := zipFile(t, map[string]string{"../escaped.txt": "pwned"})
+	_ = extractArchive(archive, dest)
+
+	if _, err := os.Stat(filepath.Join(parent, "escaped.txt")); err == nil {
+		t.Fatal("a zip entry was written outside the destination")
 	}
 }

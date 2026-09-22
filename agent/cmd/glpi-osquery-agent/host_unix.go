@@ -12,6 +12,10 @@ import (
 	"syscall"
 )
 
+// redirectServiceOutput is a no-op on Unix, where systemd's journal and
+// launchd's StandardErrorPath already capture stderr.
+func redirectServiceOutput() {}
+
 // hostServe runs the agent under signal control.
 //
 // systemd and launchd both stop a daemon by signalling it, so there is no

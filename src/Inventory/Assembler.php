@@ -93,6 +93,8 @@ final class Assembler
             'batteries'       => $this->batteries(),
             'monitors'        => $this->monitors(),
             'videos'          => $this->videos(),
+            'sounds'          => $this->sounds(),
+            'antivirus'       => $this->antivirus(),
             'controllers'     => $this->controllers(),
             'usbdevices'      => $this->usbDevices(),
             'virtualmachines' => $this->virtualMachines(),
@@ -179,6 +181,69 @@ final class Assembler
         $rows = $this->snap[$query] ?? [];
 
         return is_array($rows) ? $rows : [];
+    }
+
+    /**
+     * linux, darwin or windows — or empty when nothing has said yet.
+     *
+     * Needed wherever osquery means different things by the same column on
+     * different platforms, which is more often than its specs suggest.
+     */
+    private function platform(): string
+    {
+        $os = $this->one('inv_os_version');
+        foreach (
+            [
+                self::str($os, 'platform'),
+                self::str($os, 'platform_like'),
+                trim((string) ($this->agent['platform'] ?? '')),
+                trim((string) ($this->agent['platform_like'] ?? '')),
+            ] as $candidate
+        ) {
+            if ($candidate === 'windows' || $candidate === 'darwin') {
+                return $candidate;
+            }
+        }
+
+        return self::str($os, 'platform') !== '' || trim((string) ($this->agent['platform'] ?? '')) !== ''
+            ? 'linux'
+            : '';
+    }
+
+    /**
+     * One system_profiler data type's `_items`, decoded.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    private function profiler(string $data_type): array
+    {
+        foreach ($this->rows('inv_system_profiler') as $row) {
+            if (self::str($row, 'data_type') !== $data_type) {
+                continue;
+            }
+            $items = json_decode((string) ($row['value'] ?? ''), true);
+
+            return is_array($items) ? array_values(array_filter($items, 'is_array')) : [];
+        }
+
+        return [];
+    }
+
+    /** "16 GB", "1536 MB" → MiB, or 0 when it is not a size. */
+    private static function sizeToMib(string $value): int
+    {
+        if (preg_match('/^\s*([\d.]+)\s*(TB|GB|MB|KB)\b/i', $value, $m) !== 1) {
+            return 0;
+        }
+
+        $factor = match (strtoupper($m[2])) {
+            'TB' => 1048576,
+            'GB' => 1024,
+            'MB' => 1,
+            default => 1 / 1024,
+        };
+
+        return (int) round((float) $m[1] * $factor);
     }
 
     private static function str(array $row, string $key): string
@@ -287,8 +352,55 @@ final class Assembler
             'name'         => $name,
             'uuid'         => self::str($si, 'uuid'),
             'memory'       => $memory,
-            'chassis_type' => self::str($this->one('inv_chassis_info'), 'chassis_types'),
+            'chassis_type' => $this->chassisType(),
+            // GLPI files this as the computer's domain. Only a joined machine
+            // has one; a workgroup machine returns no row, and says nothing.
+            'workgroup'    => self::str($this->one('inv_ntdomains'), 'domain_name'),
         ]);
+    }
+
+    /**
+     * What sort of machine this is — GLPI uses it as the computer type.
+     *
+     * It matters more than it looks: with no chassis type GLPI falls back to
+     * the motherboard model, so a Framework laptop arrived typed "FRANMDCP07".
+     * Each platform keeps the answer somewhere different.
+     */
+    private function chassisType(): string
+    {
+        // Windows: a comma-separated list, of which the first is the enclosure
+        // itself and the rest are things like a docking station.
+        //
+        // "Other" and "Unknown" are SMBIOS's own ways of not saying, and
+        // "Unknown (N)" is osquery's for a code it has no name for; GLPI would
+        // file any of them as a computer type, so they count as no answer.
+        $meaningful = static fn(string $type): string =>
+            $type === 'Other' || str_starts_with($type, 'Unknown') ? '' : $type;
+
+        $windows = self::str($this->one('inv_chassis_info'), 'chassis_types');
+        if ($windows !== '') {
+            return $meaningful(trim(explode(',', $windows)[0]));
+        }
+
+        // Linux: SMBIOS via the agent's extension, named the way osquery
+        // names them on Windows.
+        $linux = $meaningful(self::str($this->one('inv_chassis_linux'), 'chassis_name'));
+        if ($linux !== '') {
+            return $linux;
+        }
+
+        // macOS has no SMBIOS chassis field at all, but the model name says it.
+        $model = self::str($this->profiler('SPHardwareDataType')[0] ?? [], 'machine_name');
+
+        return match (true) {
+            $model === ''                       => '',
+            str_starts_with($model, 'MacBook')  => 'Laptop',
+            str_starts_with($model, 'iMac')     => 'All in One',
+            str_starts_with($model, 'Mac mini') => 'Mini PC',
+            str_starts_with($model, 'Mac Pro')  => 'Tower',
+            str_starts_with($model, 'Mac Studio') => 'Desktop',
+            default                             => '',
+        };
     }
 
     private function bios(): array
@@ -349,6 +461,28 @@ final class Assembler
         $full = trim(self::str($os, 'name') . ' ' . self::str($os, 'version'));
         if ($full !== '') {
             $entry['full_name'] = $full;
+        }
+
+        // GLPI names the operating system after full_name. On Windows that
+        // must not carry the version: os_version's version is the kernel build
+        // (10.0.22631), so every cumulative update would create another
+        // "Microsoft Windows 11 Pro 10.0.…" operating system. Windows keeps
+        // the name people use for a release (23H2) in the registry instead, and
+        // the build stays visible as the kernel version.
+        if ($this->platform() === 'windows') {
+            $entry['full_name'] = self::str($os, 'name');
+
+            $registry = [];
+            foreach ($this->rows('inv_windows_version') as $row) {
+                $registry[self::str($row, 'name')] = self::str($row, 'data');
+            }
+            $release = ($registry['DisplayVersion'] ?? '') ?: ($registry['ReleaseId'] ?? '');
+            if ($release !== '') {
+                $entry['version'] = $release;
+            }
+            if (self::str($kernel, 'version') === '') {
+                $entry['kernel_version'] = self::str($os, 'version');
+            }
         }
 
         // osquery gives uptime, GLPI wants the moment of boot.
@@ -458,6 +592,52 @@ final class Assembler
             ]);
         }
 
+        if ($out !== []) {
+            return $out;
+        }
+
+        return $this->macMemories();
+    }
+
+    /**
+     * Memory on a Mac with no SMBIOS to read it from.
+     *
+     * Apple silicon has none, so memory_devices is empty there and the machine
+     * would report no memory at all. system_profiler describes it either as
+     * slots (Intel, which has SMBIOS anyway) or as a single package of unified
+     * memory, which is one entry.
+     */
+    private function macMemories(): array
+    {
+        $out  = [];
+        $slot = 0;
+
+        foreach ($this->profiler('SPMemoryDataType') as $item) {
+            $banks = isset($item['_items']) && is_array($item['_items']) ? $item['_items'] : [$item];
+            foreach ($banks as $bank) {
+                if (!is_array($bank)) {
+                    continue;
+                }
+                $slot++;
+                $size = self::sizeToMib(self::str($bank, 'dimm_size') ?: self::str($bank, 'SPMemoryDataType'));
+                if ($size <= 0) {
+                    continue;
+                }
+                $speed = (int) self::str($bank, 'dimm_speed');
+
+                $out[] = self::clean([
+                    'capacity'     => $size,
+                    'caption'      => self::str($bank, '_name'),
+                    'manufacturer' => self::str($bank, 'dimm_manufacturer'),
+                    'serialnumber' => ltrim(self::str($bank, 'dimm_serial_number'), '-'),
+                    'model'        => self::str($bank, 'dimm_part_number'),
+                    'type'         => self::str($bank, 'dimm_type'),
+                    'speed'        => $speed > 0 ? (string) $speed : '',
+                    'numslots'     => $slot,
+                ]);
+            }
+        }
+
         return $out;
     }
 
@@ -467,6 +647,17 @@ final class Assembler
 
         // POSIX: size is in blocks.
         foreach ($this->rows('inv_block_devices') as $row) {
+            // macOS marks each APFS container as a whole disk of its own, so
+            // the physical SSD arrives alongside two or three synthesized disks
+            // carved out of it and the machine reports double its storage.
+            // Mounted disk images are whole disks too. Neither is hardware.
+            $label = self::str($row, 'label');
+            $model = self::str($row, 'model');
+            if ($label === 'AppleAPFSMedia' || stripos($model, 'Disk Image') !== false
+                || stripos($label, 'Disk Image') !== false) {
+                continue;
+            }
+
             $bytes = (float) self::int($row, 'size') * (float) self::int($row, 'block_size');
             $disksize = self::mib($bytes);
             if ($disksize <= 0) {
@@ -507,7 +698,8 @@ final class Assembler
 
     private function drives(): array
     {
-        $out = [];
+        $out        = [];
+        $encryption = $this->encryption();
 
         // POSIX: block counts × block size.
         //
@@ -525,6 +717,13 @@ final class Assembler
             if ($device === '') {
                 continue;
             }
+            // macOS mounts half a dozen APFS volumes under /System/Volumes —
+            // VM, Preboot, Update, xarts and so on — that share one container
+            // with the startup disk and each report its full size. The Data
+            // volume is the one that holds anything; the rest are plumbing.
+            if (str_starts_with($path, '/System/Volumes/') && $path !== '/System/Volumes/Data') {
+                continue;
+            }
             if (isset($by_device[$device]) && strlen(self::str($by_device[$device], 'path')) <= strlen($path)) {
                 continue;
             }
@@ -538,15 +737,20 @@ final class Assembler
                 continue;
             }
 
+            $device = self::str($row, 'device');
+            // mounts names an LVM volume /dev/mapper/vg-lv and gives its kernel
+            // name (/dev/dm-0) as the alias; encryption is known by either.
+            $crypt = $encryption[$device] ?? $encryption[self::str($row, 'device_alias')] ?? [];
+
             $out[] = self::clean([
-                'volumn'     => self::str($row, 'device'),
+                'volumn'     => $device,
                 'type'       => self::str($row, 'path'),
                 'filesystem' => self::str($row, 'type'),
                 'total'      => $total,
                 // blocks_available, not blocks_free: the difference is the
                 // root reserve, and available is the number a user can act on.
                 'free'       => self::mib((float) self::int($row, 'blocks_available') * $bs),
-            ]);
+            ]) + $crypt;
         }
 
         // Windows: bytes, with -1 meaning the query failed for that drive.
@@ -574,7 +778,110 @@ final class Assembler
                 $entry['free'] = self::mib((float) $free);
             }
 
-            $out[] = self::clean($entry);
+            $out[] = self::clean($entry) + ($encryption[strtoupper(self::str($row, 'device_id'))] ?? []);
+        }
+
+        return $out;
+    }
+
+    /**
+     * What is known about each volume's encryption, keyed by the volume.
+     *
+     * Kept out of the drive loops because GLPI's reading of these fields is
+     * unforgiving: Asset\Volume turns encrypt_status into ENCRYPTION_STATUS_YES
+     * for the literal "Yes", PARTIALLY for "Partially", and **NO for everything
+     * else, including an empty string**. So a volume osquery could not read must
+     * carry no encryption fields at all — emitting them would publish "not
+     * encrypted" about a LUKS volume whose status osquery simply left blank,
+     * which is the one wrong answer that looks like a finding.
+     *
+     * @return array<string,array<string,string>>
+     */
+    private function encryption(): array
+    {
+        $out = [];
+
+        foreach ($this->rows('inv_bitlocker') as $row) {
+            $letter = strtoupper(self::str($row, 'drive_letter'));
+            if ($letter === '') {
+                continue;
+            }
+
+            // Win32_EncryptableVolume: 0 decrypted, 1 encrypted, 2 and 3 in
+            // progress, 4 and 5 paused. A volume mid-conversion is genuinely
+            // partial, which GLPI has a value for.
+            $conversion = self::int($row, 'conversion_status');
+            $percent    = self::int($row, 'percentage_encrypted');
+
+            $status = match (true) {
+                $conversion === 1 => 'Yes',
+                in_array($conversion, [2, 3, 4, 5], true) => 'Partially',
+                $percent > 0 && $percent < 100 => 'Partially',
+                default => 'No',
+            };
+
+            $method = self::str($row, 'encryption_method');
+
+            $out[$letter] = self::clean([
+                'encrypt_name'   => 'BitLocker',
+                // 'None' is how bitlocker_info says there is no algorithm, and
+                // it would otherwise be displayed as though it were one.
+                'encrypt_algo'   => strcasecmp($method, 'None') === 0 ? '' : $method,
+                'encrypt_status' => $status,
+                // Encrypted and unprotected are different states — a suspended
+                // volume still holds ciphertext but hands out its key — and
+                // GLPI has nowhere else to put the distinction.
+                'encrypt_type'   => self::int($row, 'protection_status') === 1
+                    ? 'Protection on'
+                    : 'Protection off',
+            ]);
+        }
+
+        // Linux, from the agent's walk of the device-mapper stack. The row for
+        // a mounted volume says whether anything beneath it is dm-crypt; the
+        // crypt layer's own row says which format it is.
+        $stack = $this->rows('inv_block_stack');
+        $formats = [];
+        foreach ($stack as $row) {
+            if (preg_match('/^CRYPT-([A-Z0-9]+)-/', self::str($row, 'dm_uuid'), $m) === 1) {
+                $formats[self::str($row, 'dm_name')] = $m[1];
+            }
+        }
+        foreach ($stack as $row) {
+            $encrypted = self::str($row, 'encrypted');
+            if ($encrypted === '') {
+                continue;
+            }
+            $crypt = self::str($row, 'crypt_device');
+            $format = $formats[$crypt] ?? '';
+
+            $fields = $encrypted === '1'
+                ? self::clean([
+                    'encrypt_name'   => $format !== '' ? $format : 'dm-crypt',
+                    'encrypt_status' => 'Yes',
+                ])
+                : ['encrypt_status' => 'No'];
+
+            $out[self::str($row, 'device')] = $fields;
+            if (self::str($row, 'dm_name') !== '') {
+                $out['/dev/mapper/' . self::str($row, 'dm_name')] = $fields;
+            }
+        }
+
+        foreach ($this->rows('inv_disk_encryption') as $row) {
+            $name = self::str($row, 'name');
+            if ($name === '' || self::str($row, 'encrypted') === '') {
+                continue;
+            }
+
+            $filevault = self::str($row, 'filevault_status');
+
+            $out[$name] = self::clean([
+                'encrypt_name'   => $filevault !== '' ? 'FileVault' : '',
+                'encrypt_algo'   => self::str($row, 'type'),
+                'encrypt_status' => self::int($row, 'encrypted') === 1 ? 'Yes' : 'No',
+                'encrypt_type'   => self::str($row, 'encryption_status'),
+            ]);
         }
 
         return $out;
@@ -596,7 +903,7 @@ final class Assembler
             $key   = self::str($nic, 'interface');
             $label = self::interfaceLabel($nic);
 
-            $speed = self::int($nic, 'link_speed') ?: self::int($nic, 'speed');
+            $speed = self::nicSpeed($nic);
             $base  = self::clean([
                 'description'  => $label,
                 'mac'          => self::str($nic, 'mac'),
@@ -650,6 +957,29 @@ final class Assembler
         }
 
         return $out;
+    }
+
+    /**
+     * Link speed in Mbit/s, which is what GLPI stores.
+     *
+     * POSIX `link_speed` is already Mbit/s. Windows leaves it empty and fills
+     * `speed` in **bits** per second, so passing it through made a gigabit
+     * adapter a million times faster than it is — and Win32_NetworkAdapter
+     * reports an adapter with no link as 2^63-1, a number no port has.
+     */
+    private static function nicSpeed(array $nic): int
+    {
+        $mbits = self::int($nic, 'link_speed');
+        if ($mbits > 0) {
+            return $mbits;
+        }
+
+        $bits = self::str($nic, 'speed');
+        if ($bits === '' || !ctype_digit($bits) || strlen($bits) > 13) {
+            return 0;
+        }
+
+        return (int) round((int) $bits / 1000000);
     }
 
     /**
@@ -850,7 +1180,7 @@ final class Assembler
 
         // POSIX and Windows ask for local accounts differently — see
         // DefaultPacks — so both query names feed this one section.
-        foreach (array_merge($this->rows('inv_users'), $this->rows('inv_users_windows')) as $row) {
+        foreach (array_merge($this->rows('inv_users'), $this->rows('inv_users_linux'), $this->rows('inv_users_windows')) as $row) {
             $login = self::str($row, 'username');
             if ($login === '' || isset($seen[$login])) {
                 continue;
@@ -872,7 +1202,7 @@ final class Assembler
     private function localGroups(): array
     {
         $out = [];
-        foreach ($this->rows('inv_groups') as $row) {
+        foreach (array_merge($this->rows('inv_groups'), $this->rows('inv_groups_linux')) as $row) {
             $name = self::str($row, 'groupname');
             if ($name === '') {
                 continue;
@@ -891,9 +1221,10 @@ final class Assembler
         $out  = [];
         $seen = [];
 
-        // POSIX via logged_in_users, Windows via logon_sessions — the same
-        // question, two tables.
-        foreach (['inv_logged_in_users', 'inv_logon_sessions'] as $query) {
+        // POSIX via logged_in_users, Windows via logon_sessions, and Linux
+        // under systemd via the user service managers — the same question,
+        // three tables.
+        foreach (['inv_logged_in_users', 'inv_session_users', 'inv_logon_sessions'] as $query) {
             foreach ($this->rows($query) as $row) {
                 $login = self::str($row, 'user');
                 if ($login === '' || isset($seen[$login])) {
@@ -914,19 +1245,52 @@ final class Assembler
     private function batteries(): array
     {
         $out = [];
+
+        // osquery reports capacity in mAh, GLPI stores mWh, and the two are
+        // not interchangeable — the difference is the voltage. On Windows
+        // osquery derived its mAh from Windows' own mWh by assuming 12 V (its
+        // spec says so), so multiplying back is exact. On macOS the capacity
+        // is a genuine mAh and the pack's voltage is what converts it; with no
+        // voltage the capacity is omitted rather than off by a factor of ten.
+        $windows = $this->platform() === 'windows';
+
         foreach ($this->rows('inv_battery') as $row) {
-            $entry = [
+            $voltage = self::int($row, 'voltage');
+            // null rather than 0 where there is no answer: clean() keeps an
+            // integer zero, and GLPI would store it as a battery that holds
+            // nothing.
+            $to_mwh  = static fn(int $mah): ?int => match (true) {
+                $mah <= 0    => null,
+                $windows     => $mah * 12,
+                $voltage > 0 => (int) round($mah * $voltage / 1000),
+                default      => null,
+            };
+
+            $out[] = self::clean([
                 'name'          => self::str($row, 'model'),
                 'manufacturer'  => self::str($row, 'manufacturer'),
                 'serial'        => self::str($row, 'serial_number'),
                 'chemistry'     => self::str($row, 'chemistry'),
                 'date'          => self::date(self::str($row, 'manufacture_date')),
-                // osquery reports mAh and mV; GLPI stores the same units.
-                'capacity'      => self::int($row, 'designed_capacity'),
-                'real_capacity' => self::int($row, 'max_capacity'),
-                'voltage'       => self::int($row, 'voltage'),
-            ];
-            $out[] = self::clean($entry);
+                'capacity'      => $to_mwh(self::int($row, 'designed_capacity')),
+                'real_capacity' => $to_mwh(self::int($row, 'max_capacity')),
+                'voltage'       => $voltage > 0 ? $voltage : null,
+            ]);
+        }
+
+        // Linux, from the agent's extension, which converts to GLPI's units
+        // itself because only it can see whether the kernel reported energy
+        // or charge.
+        foreach ($this->rows('inv_battery_linux') as $row) {
+            $out[] = self::clean([
+                'name'          => self::str($row, 'model') ?: self::str($row, 'name'),
+                'manufacturer'  => self::str($row, 'manufacturer'),
+                'serial'        => self::str($row, 'serial'),
+                'chemistry'     => self::str($row, 'technology'),
+                'capacity'      => self::int($row, 'design_capacity_mwh') ?: null,
+                'real_capacity' => self::int($row, 'full_capacity_mwh') ?: null,
+                'voltage'       => self::int($row, 'voltage_mv') ?: null,
+            ]);
         }
 
         return $out;
@@ -1051,6 +1415,124 @@ final class Assembler
             ]);
         }
 
+        // Linux: video_info is Windows-only, but the GPU is a PCI display
+        // controller. GLPI drops a card's name from `controllers` once it
+        // arrives here, so it is not listed twice.
+        foreach ($this->rows('inv_pci_devices') as $row) {
+            if (self::str($row, 'pci_class') !== 'Display controller') {
+                continue;
+            }
+            $name = self::str($row, 'model');
+            if ($name === '') {
+                continue;
+            }
+            $out[] = self::clean([
+                'name'    => $name,
+                'chipset' => self::str($row, 'vendor'),
+                'pcislot' => self::str($row, 'pci_slot'),
+            ]);
+        }
+
+        // macOS, from system_profiler.
+        foreach ($this->profiler('SPDisplaysDataType') as $gpu) {
+            $name = self::str($gpu, 'sppci_model') ?: self::str($gpu, '_name');
+            if ($name === '') {
+                continue;
+            }
+
+            $resolution = '';
+            foreach ((array) ($gpu['spdisplays_ndrvs'] ?? []) as $display) {
+                if (is_array($display)) {
+                    $pixels = self::str($display, '_spdisplays_pixels') ?: self::str($display, 'spdisplays_pixelresolution');
+                    if (preg_match('/(\d+)\s*x\s*(\d+)/', $pixels, $m) === 1) {
+                        $resolution = $m[1] . 'x' . $m[2];
+                        break;
+                    }
+                }
+            }
+
+            // Discrete VRAM where there is some, the shared allowance on Intel
+            // graphics; Apple silicon has neither, and says nothing.
+            $vram = self::sizeToMib(self::str($gpu, 'spdisplays_vram') ?: self::str($gpu, 'spdisplays_vram_shared'));
+
+            $out[] = self::clean([
+                'name'       => $name,
+                'chipset'    => self::str($gpu, 'sppci_model'),
+                'memory'     => $vram > 0 ? $vram : null,
+                'resolution' => $resolution,
+            ]);
+        }
+
+        return $out;
+    }
+
+    private function sounds(): array
+    {
+        $out = [];
+
+        // Linux: the audio function of a PCI device.
+        foreach ($this->rows('inv_pci_devices') as $row) {
+            if (self::str($row, 'pci_subclass') !== 'Audio device') {
+                continue;
+            }
+            $name = self::str($row, 'model');
+            if ($name === '') {
+                continue;
+            }
+            $out[] = self::clean([
+                'name'         => $name,
+                'manufacturer' => self::str($row, 'vendor'),
+            ]);
+        }
+
+        // Windows: the "Sound, video and game controllers" device class.
+        foreach ($this->rows('inv_drivers') as $row) {
+            if (strcasecmp(self::str($row, 'class'), 'MEDIA') !== 0) {
+                continue;
+            }
+            $name = self::str($row, 'device_name');
+            if ($name === '') {
+                continue;
+            }
+            $out[] = self::clean([
+                'name'         => $name,
+                'caption'      => self::str($row, 'description'),
+                'manufacturer' => self::str($row, 'manufacturer') ?: self::str($row, 'provider'),
+            ]);
+        }
+
+        return $out;
+    }
+
+    /**
+     * Antivirus products, from Windows Security Center.
+     *
+     * `state` is On, Off, Snoozed or Expired; only On is protection. The
+     * product's other registrations — firewall, antispyware — are the same
+     * vendor's other hats and are not antivirus.
+     */
+    private function antivirus(): array
+    {
+        $out = [];
+        foreach ($this->rows('inv_security_products') as $row) {
+            if (strcasecmp(self::str($row, 'type'), 'Antivirus') !== 0) {
+                continue;
+            }
+            $name = self::str($row, 'name');
+            if ($name === '') {
+                continue;
+            }
+            $entry = [
+                'name'    => $name,
+                'enabled' => strcasecmp(self::str($row, 'state'), 'On') === 0,
+            ];
+            // Only a product that says either way; absent is not "out of date".
+            if (self::str($row, 'signatures_up_to_date') !== '') {
+                $entry['uptodate'] = self::int($row, 'signatures_up_to_date') === 1;
+            }
+            $out[] = $entry;
+        }
+
         return $out;
     }
 
@@ -1110,6 +1592,40 @@ final class Assembler
                 'productid'    => self::str($row, 'model_id'),
                 'class'        => self::str($row, 'class'),
                 'subclass'     => self::str($row, 'subclass'),
+            ]);
+        }
+
+        // Windows has no usb_devices table, but every USB device is in
+        // `drivers` under an instance id of the form
+        // USB\VID_046D&PID_C52B\<serial>. A composite device also lists each
+        // of its interfaces (…&MI_00) as a device of its own, which is one
+        // physical thing counted several times, so only the parent is kept.
+        // Windows invents an instance id containing '&' when the device has
+        // no serial, and that is not one.
+        $seen = [];
+        foreach ($this->rows('inv_drivers') as $row) {
+            $id = self::str($row, 'device_id');
+            if (preg_match('/^USB\\\\VID_([0-9A-F]{4})&PID_([0-9A-F]{4})(&[^\\\\]*)?\\\\(.*)$/i', $id, $m) !== 1) {
+                continue;
+            }
+            if (stripos($m[3], '&MI_') !== false) {
+                continue;
+            }
+            $serial = str_contains($m[4], '&') ? '' : $m[4];
+            $key = strtolower($m[1] . $m[2] . $serial);
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+
+            $name = self::str($row, 'device_name') ?: self::str($row, 'description');
+            $out[] = self::clean([
+                'name'         => $name,
+                'caption'      => $name,
+                'manufacturer' => self::str($row, 'manufacturer'),
+                'serial'       => $serial,
+                'vendorid'     => strtolower($m[1]),
+                'productid'    => strtolower($m[2]),
             ]);
         }
 

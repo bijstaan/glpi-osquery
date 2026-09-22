@@ -42,6 +42,7 @@ if ($Uninstall) {
         Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
         sc.exe delete $ServiceName | Out-Null
     }
+    netsh advfirewall firewall delete rule name="GLPI osquery agent status listener" | Out-Null
     Remove-Item -Recurse -Force $InstallRoot -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force "$env:ProgramData\GLPIOsqueryAgent" -ErrorAction SilentlyContinue
     Write-Host 'Removed.'
@@ -109,10 +110,17 @@ New-Service -Name $ServiceName `
     -Description 'Reports inventory to GLPI and answers live queries, via a bundled osqueryd.' `
     -StartupType Automatic | Out-Null
 
-# Restart on failure, and treat a deliberate exit as a restart too: the agent
-# stops on purpose after staging an update so it comes back on the new version.
+# Restart on failure, including a non-crash stop with an error code: the agent
+# stops on purpose after staging an update, with a service-specific exit code,
+# so that it comes back on the new version.
 sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
 sc.exe failureflag $ServiceName 1 | Out-Null
+
+# GLPI's device page reaches the agent's status listener on 62354, which
+# Windows Defender Firewall otherwise drops. The listener itself refuses
+# everyone but the GLPI server and the configured trusted addresses.
+netsh advfirewall firewall delete rule name="GLPI osquery agent status listener" | Out-Null
+netsh advfirewall firewall add rule name="GLPI osquery agent status listener" dir=in action=allow protocol=TCP localport=62354 profile=any | Out-Null
 
 Start-Service -Name $ServiceName
 Get-Service -Name $ServiceName | Format-List Name, Status, StartType

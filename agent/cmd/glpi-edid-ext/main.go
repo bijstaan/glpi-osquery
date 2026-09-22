@@ -73,6 +73,8 @@ func main() {
 
 	server.RegisterPlugin(table.NewPlugin(TableName, columns(), generate))
 	server.RegisterPlugin(table.NewPlugin(BlockTableName, blockColumns(), generateBlockStack))
+	server.RegisterPlugin(table.NewPlugin(BatteryTableName, batteryColumns(), generateBattery))
+	server.RegisterPlugin(table.NewPlugin(ChassisTableName, chassisColumns(), generateChassis))
 
 	if err := server.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "extension stopped:", err)

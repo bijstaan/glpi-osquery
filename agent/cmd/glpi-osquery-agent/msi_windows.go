@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/bijstaan/glpi-osquery-agent/internal/config"
+	"github.com/bijstaan/glpi-osquery-agent/internal/httpd"
 	"github.com/bijstaan/glpi-osquery-agent/internal/updater"
 	"github.com/bijstaan/glpi-osquery-agent/internal/version"
 )
@@ -70,6 +71,9 @@ func msiInstall(args []string) error {
 	if err := os.MkdirAll(config.DefaultStateDir(), 0o750); err != nil {
 		return fmt.Errorf("create the state directory: %w", err)
 	}
+	if err := config.SecureDataRoot(); err != nil {
+		return fmt.Errorf("restrict access to the state directory: %w", err)
+	}
 
 	// ServiceInstall takes the binary path from its component's key file, which
 	// is the versioned one, and offers no way to override it. Left alone the SCM
@@ -85,16 +89,27 @@ func msiInstall(args []string) error {
 		return fmt.Errorf("point the service at the current junction: %w", err)
 	}
 
-	// Restart on failure, and — via failureflag — on a clean exit too. The agent
-	// stops deliberately after staging an update so it comes back on the new
-	// version; without the flag the SCM treats that stop as final and the update
-	// never completes.
+	// Restart on failure, and — via failureflag — on a non-crash stop that
+	// reports an error code. The agent stops deliberately after staging an
+	// update, with a service-specific exit code (see exitCodeUpdateStaged), so
+	// that it comes back on the new version; a stop with exit code 0 would be
+	// taken as final, whatever the flag says.
 	if err := sc("failure", ServiceName, "reset=", "86400",
 		"actions=", "restart/5000/restart/5000/restart/30000"); err != nil {
 		return fmt.Errorf("set the service failure actions: %w", err)
 	}
 	if err := sc("failureflag", ServiceName, "1"); err != nil {
 		return fmt.Errorf("set the service failure flag: %w", err)
+	}
+
+	// GLPI's device page asks the agent for its status, and to run an
+	// inventory, on this port. Windows Defender Firewall drops unsolicited
+	// inbound traffic by default, so without a rule both simply time out on
+	// Windows while working everywhere else. The listener refuses anyone but
+	// the GLPI server and the configured trusted addresses, so opening the
+	// port does not open the agent.
+	if err := openFirewall(httpd.DefaultPort); err != nil {
+		fmt.Fprintln(os.Stderr, "could not add the firewall rule for the status listener:", err)
 	}
 
 	if *server == "" || *secret == "" {
@@ -138,6 +153,8 @@ func msiUninstall(args []string) error {
 		return err
 	}
 
+	closeFirewall()
+
 	// os.Remove, never RemoveAll: the junction points at a real directory, and
 	// following it would delete what it names rather than the link itself.
 	link := filepath.Join(installTree(*installRoot), "current")
@@ -146,6 +163,29 @@ func msiUninstall(args []string) error {
 	}
 
 	return nil
+}
+
+// firewallRule names the inbound rule for the status listener.
+const firewallRule = "GLPI osquery agent status listener"
+
+// openFirewall allows inbound TCP to the status listener, replacing any rule a
+// previous install left so a reinstall does not stack duplicates.
+func openFirewall(port int) error {
+	closeFirewall()
+
+	out, err := exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
+		"name="+firewallRule, "dir=in", "action=allow", "protocol=TCP",
+		fmt.Sprintf("localport=%d", port), "profile=any").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("netsh: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+
+	return nil
+}
+
+// closeFirewall removes the rule; there being none is not an error.
+func closeFirewall() {
+	_ = exec.Command("netsh", "advfirewall", "firewall", "delete", "rule", "name="+firewallRule).Run()
 }
 
 // sc drives the service control manager.

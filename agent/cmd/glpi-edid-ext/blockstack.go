@@ -157,7 +157,10 @@ func findCrypt(name string, seen map[string]bool) (string, bool) {
 func generateBlockStack(ctx context.Context, queryContext table.QueryContext) ([]map[string]string, error) {
 	entries, err := os.ReadDir(sysBlock)
 	if err != nil {
-		return nil, err
+		// No block class to walk — not Linux, or a sandbox without /sys. An
+		// error here would be logged on every run of any query that reads it;
+		// a machine with no block stack to report has no rows.
+		return []map[string]string{}, nil
 	}
 
 	rows := make([]map[string]string, 0, len(entries))

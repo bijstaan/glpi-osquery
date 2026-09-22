@@ -29,12 +29,15 @@ func defaultInstallRoot() string {
 // the extension manager unable to start: every extension table was silently
 // absent, with one line about the socket buried in osqueryd's log.
 //
-// osquery.em is osqueryd's own default name, which is what an extension built
-// against osquery's SDK expects to find. The consequence worth knowing is that
-// a stock osquery service installed alongside this agent wants the same pipe,
-// and the second daemon to start does not get it.
+// Not osquery's default, \\.\pipe\osquery.em: a stock osquery service
+// installed alongside this agent — common where an MSP's client already runs
+// one — claims that pipe too, and whichever daemon starts second loses its
+// extension manager and every extension table with it. A name of our own
+// costs nothing, because osqueryd passes the socket to every extension it
+// autoloads as --socket, bundled or published alike; nothing needs to guess
+// it.
 func extensionSocket(_ string) string {
-	return `\\.\pipe\osquery.em`
+	return `\\.\pipe\glpi-osquery.em`
 }
 
 func osquerydName() string { return "osqueryd.exe" }

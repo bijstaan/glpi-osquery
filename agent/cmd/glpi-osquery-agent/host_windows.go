@@ -9,12 +9,50 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"path/filepath"
 
 	"golang.org/x/sys/windows/svc"
+
+	"github.com/bijstaan/glpi-osquery-agent/internal/config"
 )
 
 // ServiceName is what the installer registers and the SCM addresses us by.
 const ServiceName = "GLPIOsqueryAgent"
+
+// exitCodeUpdateStaged is the service-specific exit code for "stopping to
+// restart onto a newly staged version".
+const exitCodeUpdateStaged = 3
+
+// redirectServiceOutput sends stderr to a log file when running as a service.
+//
+// A service has no console, so under the SCM everything the agent logs — and
+// the osqueryd warnings and errors it forwards — went nowhere. osqueryd's own
+// glog files are written regardless; this puts the agent's log beside them, in
+// state\logs, where a technician looking at osqueryd.INFO will find it. The
+// previous file is kept as agent.log.1 once it passes 10 MB, so the log is
+// bounded without losing the run that failed.
+func redirectServiceOutput() {
+	isService, err := svc.IsWindowsService()
+	if err != nil || !isService {
+		return
+	}
+
+	dir := filepath.Join(config.DefaultStateDir(), "logs")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return
+	}
+
+	path := filepath.Join(dir, "agent.log")
+	if info, err := os.Stat(path); err == nil && info.Size() > 10<<20 {
+		_ = os.Rename(path, path+".1")
+	}
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	if err != nil {
+		return
+	}
+	os.Stderr = f
+}
 
 // hostServe runs the agent under the Windows service control manager when
 // started by it, and as an ordinary console program otherwise.
@@ -83,13 +121,19 @@ func (s *agentService) Execute(args []string, requests <-chan svc.ChangeRequest,
 			}
 
 		case err := <-done:
-			// The agent stopped on its own — an update was staged and it wants
-			// to come back on the new version. Exit cleanly so the SCM's
-			// restart policy applies rather than recording a failure.
 			if err != nil {
 				return false, 1
 			}
-			return false, 0
+			// The agent stopped on its own: an update was staged and it wants
+			// to come back on the new version. That needs a non-zero exit code.
+			// The installers set failureflag so that failure actions cover
+			// non-crash stops too, but the SCM still treats a service that
+			// reports SERVICE_STOPPED with exit code 0 as having stopped
+			// normally, and does nothing. A clean exit therefore left the
+			// agent stopped until the next reboot. A service-specific code
+			// makes the restart happen, and it shows in the event log as the
+			// update restart it is.
+			return true, exitCodeUpdateStaged
 		}
 	}
 }
