@@ -286,14 +286,44 @@ final class DefaultPacks
             [
                 'name'    => 'inv_interface_details',
                 'section' => 'networks',
-                'sql'     => 'SELECT interface, mac, type, mtu, flags, link_speed, speed, '
-                           . 'ibytes, obytes, ierrors, oerrors, '
-                           . 'description, manufacturer, connection_id, connection_status, '
-                           . 'enabled, physical_adapter, dhcp_enabled, dhcp_server, pci_slot '
+                'platform' => 'linux,darwin',
+                'sql'     => 'SELECT interface, mac, type, mtu, flags, link_speed, '
+                           . 'ibytes, obytes, ierrors, oerrors, pci_slot '
                            . "FROM interface_details WHERE mac != '00:00:00:00:00:00';",
                 'interval' => $hour,
                 'description' => 'Joined to interface_addresses by the assembler. '
                                . 'The i/o byte and error counters feed the port metrics graphs.',
+            ],
+            [
+                'name'    => 'inv_interface_details_windows',
+                'section' => 'networks',
+                'platform' => 'windows',
+                // Windows fills a different half of this table, and the MAC
+                // filter is not enough on its own.
+                //
+                // Win32_NetworkAdapter reports the WAN Miniports — the pseudo
+                // adapters behind PPTP, L2TP, IKEv2, SSTP and IPv6 tunnelling —
+                // alongside the real ones, with MACs that pass a `mac != all
+                // zeroes` test. A machine with an Ethernet port, Wi-Fi and two
+                // VPN clients arrived in GLPI with eleven network cards and
+                // eight ports named after interface indexes.
+                //
+                // NetConnectionID is set only for adapters that appear in
+                // Network Connections, which is exactly the set a person would
+                // name, and physical_adapter keeps a real NIC that has never
+                // been given a connection name. The counters are selected but
+                // not populated on Windows — see Assembler::counters(), which
+                // emits them only when the driver supplies all four.
+                'sql'     => 'SELECT interface, mac, type, mtu, flags, link_speed, speed, '
+                           . 'ibytes, obytes, ierrors, oerrors, '
+                           . 'friendly_name, description, manufacturer, connection_id, '
+                           . 'connection_status, enabled, physical_adapter, '
+                           . 'dhcp_enabled, dhcp_server, pci_slot '
+                           . "FROM interface_details WHERE mac != '00:00:00:00:00:00' "
+                           . "AND (connection_id != '' OR physical_adapter = 1);",
+                'interval' => $hour,
+                'description' => 'Windows equivalent of inv_interface_details: the adapters that appear '
+                               . 'in Network Connections, plus any physical one that does not.',
             ],
             [
                 'name'    => 'inv_interface_addresses',
@@ -377,10 +407,34 @@ final class DefaultPacks
             [
                 'name'    => 'inv_users',
                 'section' => 'local_users',
+                'platform' => 'linux,darwin',
                 'sql'     => 'SELECT uid, gid, username, description, directory, shell, uuid '
                            . 'FROM users WHERE uid >= 500 OR uid = 0;',
                 'interval' => $hour,
                 'description' => 'Real accounts: root plus non-system users.',
+            ],
+            [
+                'name'    => 'inv_users_windows',
+                'section' => 'local_users',
+                'platform' => 'windows',
+                // Separate from inv_users because the column it filters on is
+                // declared for Windows only: `type` — local, roaming or
+                // special — is absent from PRAGMA table_info(users) on Linux
+                // (measured on 5.19.0), where selecting it happens to yield an
+                // empty string rather than an error. One query could therefore
+                // carry the filter everywhere and appear to work, on undeclared
+                // behaviour that costs nothing to avoid.
+                //
+                // The split earns its keep anyway, because the POSIX rule it
+                // replaces does not describe Windows: uid there is the SID's
+                // RID, so a `uid >= 500` threshold keeps the real accounts by
+                // luck and drags in whatever service accounts sit above it.
+                // 'special' is exactly the built-in machine accounts.
+                'sql'     => 'SELECT uid, gid, username, description, directory, shell, uuid, type '
+                           . "FROM users WHERE type != 'special';",
+                'interval' => $hour,
+                'description' => 'Windows equivalent of inv_users: the local and roaming accounts, '
+                               . 'without the built-in machine ones.',
             ],
             [
                 'name'    => 'inv_groups',
@@ -391,9 +445,21 @@ final class DefaultPacks
             [
                 'name'    => 'inv_logged_in_users',
                 'section' => 'users',
-                'sql'     => "SELECT user, tty, host, time, type FROM logged_in_users WHERE type = 'user';",
+                // Excluded types rather than a single kept one. `type` means
+                // different things per platform: on POSIX it is the utmp record
+                // type, where 'user' is the only one that is a person, and on
+                // Windows it is the terminal session's state — 'active',
+                // 'disconnected' and so on. So `type = 'user'` was not merely
+                // narrow on Windows, it matched nothing ever, the machine
+                // reported no users at all, and the asset was attached to
+                // nobody. The list below is the utmp bookkeeping set; anything
+                // else, on any platform, is treated as a person.
+                'sql'     => "SELECT user, tty, host, time, type FROM logged_in_users "
+                           . "WHERE user != '' AND type NOT IN "
+                           . "('boot_time', 'runlevel', 'new_time', 'old_time', 'init', 'login', 'dead', 'empty');",
                 'interval' => $hour,
-                'description' => 'Feeds the last-logged-user fields.',
+                'description' => 'Feeds the last-logged-user fields, and the user an asset is attached to. '
+                               . 'Person sessions on every platform.',
             ],
 
             // ------------------------------------------------- peripherals
@@ -484,6 +550,29 @@ final class DefaultPacks
                            . 'model, model_id, subsystem_vendor, subsystem_model '
                            . 'FROM pci_devices;',
                 'interval' => $day,
+            ],
+            [
+                'name'    => 'inv_drivers',
+                'section' => 'controllers',
+                'platform' => 'windows',
+                // Windows has neither pci_devices nor usb_devices — both are
+                // POSIX-only in osquery — so a Windows machine reported no
+                // components whatsoever: no fingerprint reader, no controllers,
+                // nothing but the BIOS and the CPU that come from elsewhere.
+                // `drivers` is what Windows offers instead, one row per device
+                // known to SetupAPI.
+                //
+                // The excluded classes are the ones that describe software
+                // rather than hardware; without them a laptop contributes a few
+                // hundred rows, most of them meaningless in an asset list.
+                'sql'     => 'SELECT device_id, device_name, description, class, manufacturer, '
+                           . 'provider, version, service, signed '
+                           . "FROM drivers WHERE device_name != '' AND class NOT IN "
+                           . "('SoftwareComponent', 'SoftwareDevice', 'System', 'Computer', "
+                           . "'LegacyDriver', 'Volume', 'VolumeSnapshot', 'PrintQueue');",
+                'interval' => $day,
+                'description' => 'Windows devices, in place of pci_devices and usb_devices which osquery '
+                               . 'does not provide there.',
             ],
             [
                 'name'    => 'inv_usb_devices',

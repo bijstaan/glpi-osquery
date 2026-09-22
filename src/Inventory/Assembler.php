@@ -6,6 +6,7 @@
 
 namespace GlpiPlugin\Glpiosquery\Inventory;
 
+use GlpiPlugin\Glpiosquery\EnrollSecret;
 use GlpiPlugin\Glpiosquery\Node;
 
 /**
@@ -117,12 +118,34 @@ final class Assembler
         // failed to run on this cycle.
         $content = array_filter($content, static fn($v) => $v !== [] && $v !== null && $v !== '');
 
-        return [
+        $document = [
             'deviceid' => (string) $this->agent['deviceid'],
             'itemtype' => 'Computer',
             'action'   => 'inventory',
             'content'  => $content,
         ];
+
+        // The tag is how an inventory says which entity it belongs to.
+        //
+        // GLPI decides an imported asset's entity from the entity rules alone
+        // (Glpi\Inventory\MainAsset\MainAsset::handle), and when none matches
+        // it uses the inventory configuration's default — the root entity on a
+        // stock install. Nothing about the enrolment reaches that decision, so
+        // an agent enrolled with a secret scoped to a sub-entity still landed
+        // in the root, with no error anywhere to say why.
+        //
+        // The tag is the one criterion those rules have that we control, so
+        // every inventory carries the tag of the secret the agent enrolled
+        // with, and EnrollSecret::syncEntityRule keeps a rule that maps it to
+        // the entity. Absent for an agent enrolled before secrets recorded
+        // their id — no tag is better than an empty one, which GLPI stores on
+        // the agent and would then have to be cleared by hand.
+        $tag = EnrollSecret::tagFor((int) ($this->agent['plugin_glpiosquery_enrollsecrets_id'] ?? 0));
+        if ($tag !== null) {
+            $document['tag'] = $tag;
+        }
+
+        return $document;
     }
 
     /**
@@ -565,12 +588,17 @@ final class Assembler
         }
 
         $out = [];
-        foreach ($this->rows('inv_interface_details') as $nic) {
-            $name = self::str($nic, 'interface');
+        foreach (array_merge($this->rows('inv_interface_details'), $this->rows('inv_interface_details_windows')) as $nic) {
+            // Two different things, and conflating them is what produced ports
+            // named "13". `interface` is the join key — an index on Windows,
+            // a name on POSIX, and either way the value interface_addresses
+            // carries — while the label is what a person should read.
+            $key   = self::str($nic, 'interface');
+            $label = self::interfaceLabel($nic);
 
             $speed = self::int($nic, 'link_speed') ?: self::int($nic, 'speed');
             $base  = self::clean([
-                'description'  => $name,
+                'description'  => $label,
                 'mac'          => self::str($nic, 'mac'),
                 'manufacturer' => self::str($nic, 'manufacturer'),
                 'model'        => self::str($nic, 'description'),
@@ -579,7 +607,7 @@ final class Assembler
                 'pcislot'      => self::str($nic, 'pci_slot'),
                 'status'       => self::linkStatus($nic),
                 'ipdhcp'       => self::str($nic, 'dhcp_server'),
-                'virtualdev'   => self::isVirtual($name),
+                'virtualdev'   => self::isVirtualNic($nic, $key),
             ]);
 
             // Traffic counters. These are not in the `networks` part of
@@ -592,7 +620,7 @@ final class Assembler
             $base += self::counters($nic);
 
             $found = false;
-            foreach ($addresses[$name] ?? [] as $addr) {
+            foreach ($addresses[$key] ?? [] as $addr) {
                 $ip = self::str($addr, 'address');
                 if ($ip === '') {
                     continue;
@@ -672,6 +700,45 @@ final class Assembler
         }
 
         return (self::int($nic, 'flags') & 0x1) === 0x1 ? 'up' : 'down';
+    }
+
+    /**
+     * What to call an interface.
+     *
+     * On POSIX `interface` is already the name — eth0, en0 — and the Windows
+     * columns below are empty, so the fallback chain lands on it. On Windows
+     * `interface` is the adapter index and the name lives in one of three
+     * columns depending on the release: NetConnectionID, the friendly name, or
+     * the adapter's own description. Taking the first that is populated means
+     * the port is called "Ethernet" where Windows knows that name and
+     * "Intel(R) Wi-Fi 6E AX211" where it only knows the hardware, rather than
+     * "13" either way.
+     */
+    private static function interfaceLabel(array $nic): string
+    {
+        foreach (['connection_id', 'friendly_name', 'description'] as $column) {
+            $value = self::str($nic, $column);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return self::str($nic, 'interface');
+    }
+
+    /**
+     * Is this a virtual interface?
+     *
+     * Windows says so outright, and its interface names would defeat the
+     * prefix test below — an index never starts with "veth".
+     */
+    private static function isVirtualNic(array $nic, string $interface): bool
+    {
+        if (array_key_exists('physical_adapter', $nic) && self::str($nic, 'physical_adapter') !== '') {
+            return self::int($nic, 'physical_adapter') !== 1;
+        }
+
+        return self::isVirtual($interface);
     }
 
     private static function isVirtual(string $interface): bool
@@ -778,12 +845,17 @@ final class Assembler
 
     private function localUsers(): array
     {
-        $out = [];
-        foreach ($this->rows('inv_users') as $row) {
+        $out  = [];
+        $seen = [];
+
+        // POSIX and Windows ask for local accounts differently — see
+        // DefaultPacks — so both query names feed this one section.
+        foreach (array_merge($this->rows('inv_users'), $this->rows('inv_users_windows')) as $row) {
             $login = self::str($row, 'username');
-            if ($login === '') {
+            if ($login === '' || isset($seen[$login])) {
                 continue;
             }
+            $seen[$login] = true;
             $out[] = self::clean([
                 'login' => $login,
                 'name'  => self::str($row, 'description'),
@@ -998,6 +1070,23 @@ final class Assembler
                 'vendorid'     => self::str($row, 'vendor_id'),
                 'productid'    => self::str($row, 'model_id'),
                 'driver'       => self::str($row, 'driver'),
+            ]);
+        }
+
+        // Windows, where osquery has neither of the tables above and `drivers`
+        // is the only enumeration of the machine's devices.
+        foreach ($this->rows('inv_drivers') as $row) {
+            $name = self::str($row, 'device_name');
+            if ($name === '') {
+                continue;
+            }
+            $out[] = self::clean([
+                'name'         => $name,
+                'caption'      => self::str($row, 'description'),
+                'manufacturer' => self::str($row, 'manufacturer') ?: self::str($row, 'provider'),
+                'type'         => self::str($row, 'class'),
+                'driver'       => self::str($row, 'service'),
+                'rev'          => self::str($row, 'version'),
             ]);
         }
 

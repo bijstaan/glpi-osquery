@@ -195,6 +195,11 @@ if (!empty($_POST['revoke_secret'])) {
     /** @var DBmysql $DB */
     global $DB;
     $DB->update(EnrollSecret::TABLE, ['is_active' => 0], ['id' => (int) $_POST['revoke_secret']]);
+
+    // A revoked secret can enrol nobody, so the entity rule carrying its tag
+    // can only mislead the next person to read the rule collection.
+    EnrollSecret::dropEntityRule((int) $_POST['revoke_secret']);
+
     Session::addMessageAfterRedirect(__('Secret revoked. Enrolled agents are unaffected.', 'glpiosquery'));
     Html::redirect($_SERVER['REQUEST_URI']);
 }
@@ -351,7 +356,27 @@ foreach (
 
     echo "<tr>";
     echo "<td>" . htmlspecialchars((string) $row['name']) . "</td>";
-    echo "<td>" . htmlspecialchars((string) $entity) . "</td>";
+    echo "<td>" . htmlspecialchars((string) $entity);
+
+    // The entity on the secret is a promise; the rule is what keeps it. Saying
+    // so here is what turns "why did this machine import into the root?" into
+    // something an administrator can answer without reading the code.
+    $tag = EnrollSecret::tagFor((int) $row['id']);
+    if ($tag !== null && (int) $row['entities_id'] > 0) {
+        $rules_id = EnrollSecret::ruleIdFor((int) $row['id']);
+        echo "<div class='text-muted small'>" . htmlspecialchars(sprintf(__('tag %s', 'glpiosquery'), $tag)) . " · ";
+        if ($rules_id !== null) {
+            echo "<a href='" . htmlspecialchars(RuleImportEntity::getFormURLWithID($rules_id)) . "'>"
+               . __('entity rule', 'glpiosquery') . "</a>";
+        } else {
+            echo "<span class='text-danger'>"
+               . __('no entity rule — agents import into the default entity', 'glpiosquery')
+               . "</span>";
+        }
+        echo "</div>";
+    }
+
+    echo "</td>";
     echo "<td>" . (int) $row['enroll_count'] . "</td>";
     echo "<td>" . ($row['is_active']
         ? "<span class='badge bg-green'>" . __('Active') . "</span>"

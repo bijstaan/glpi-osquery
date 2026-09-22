@@ -545,6 +545,111 @@ function plugin_glpiosquery_migrate()
                          . "FROM interface_details WHERE mac != '00:00:00:00:00:00';",
         ]
     );
+
+    // The same rewrite, for the two queries whose filters were POSIX ideas
+    // applied to every platform.
+    //
+    // `logged_in_users.type` is a utmp record type on POSIX, where 'user' is
+    // the only one that is a person, and a terminal session state on Windows —
+    // 'active', 'disconnected' and so on. Keeping only 'user' therefore matched
+    // nothing whatsoever on Windows: the machine reported no users, the
+    // last-logged-user fields stayed empty, and the asset was attached to
+    // nobody, with no error to suggest the query was the problem.
+    //
+    // `users.uid` is likewise a POSIX rule: on Windows it is the SID's RID, so
+    // a threshold keeps real accounts by luck and service accounts with them.
+    // Windows says which is which in `type` — local, roaming or special — and
+    // that column is empty on POSIX, so the comparison is a no-op there.
+    //
+    // Both are matched against the exact strings the previous release shipped,
+    // so a query an operator has edited is left alone rather than reverted.
+    $DB->update(
+        'glpi_plugin_glpiosquery_queries',
+        ['sql_query' => "SELECT user, tty, host, time, type FROM logged_in_users "
+                      . "WHERE user != '' AND type NOT IN "
+                      . "('boot_time', 'runlevel', 'new_time', 'old_time', 'init', 'login', 'dead', 'empty');"],
+        [
+            'name'      => 'inv_logged_in_users',
+            'sql_query' => "SELECT user, tty, host, time, type FROM logged_in_users WHERE type = 'user';",
+        ]
+    );
+
+    // inv_users keeps its SQL and loses Windows, where the uid threshold it
+    // filters on is a SID's RID and means nothing. Its replacement there,
+    // inv_users_windows, is added to existing packs by the seeding pass, which
+    // does add queries a pack is missing.
+    $DB->update(
+        'glpi_plugin_glpiosquery_queries',
+        ['platform' => 'linux,darwin'],
+        [
+            'name'      => 'inv_users',
+            'platform'  => 'all',
+            'sql_query' => 'SELECT uid, gid, username, description, directory, shell, uuid '
+                         . 'FROM users WHERE uid >= 500 OR uid = 0;',
+        ]
+    );
+
+    // inv_interface_details keeps its name and loses Windows, where half the
+    // columns it selects are empty and the MAC filter lets every WAN Miniport
+    // through. inv_interface_details_windows replaces it there, and is added to
+    // existing packs by the seeding pass. Matched on the SQL the last release
+    // shipped, so an edited query keeps whatever platform it was given.
+    $DB->update(
+        'glpi_plugin_glpiosquery_queries',
+        ['platform' => 'linux,darwin',
+            'sql_query' => 'SELECT interface, mac, type, mtu, flags, link_speed, '
+                         . 'ibytes, obytes, ierrors, oerrors, pci_slot '
+                         . "FROM interface_details WHERE mac != '00:00:00:00:00:00';"],
+        [
+            'name'      => 'inv_interface_details',
+            'platform'  => 'all',
+            'sql_query' => 'SELECT interface, mac, type, mtu, flags, link_speed, speed, '
+                         . 'ibytes, obytes, ierrors, oerrors, '
+                         . 'description, manufacturer, connection_id, connection_status, '
+                         . 'enabled, physical_adapter, dhcp_enabled, dhcp_server, pci_slot '
+                         . "FROM interface_details WHERE mac != '00:00:00:00:00:00';",
+        ]
+    );
+
+    // Four shipped saved queries gained Windows and macOS siblings, so the
+    // bare names they had became ambiguous — "Connected monitors" now means one
+    // of three statements. Renamed rather than left alone because the old name
+    // would sit in the list beside its own platform-suffixed siblings, and
+    // matched on the shipped SQL so a query an operator edited keeps its name.
+    foreach (
+        [
+            ['Disk space', 'Disk space (Linux/macOS)',
+             "SELECT path, type, round((blocks * blocks_size) / 1073741824.0, 1) AS total_gb, "
+             . "round((blocks_available * blocks_size) / 1073741824.0, 1) AS free_gb "
+             . "FROM mounts WHERE device LIKE '/dev/%' ORDER BY total_gb DESC;"],
+            ['Recently installed packages', 'Installed packages (Debian/Ubuntu)',
+             'SELECT name, version, arch, size FROM deb_packages ORDER BY name;'],
+            ['Disk encryption status', 'Disk encryption (Linux/macOS)',
+             'SELECT name, encrypted, type, encryption_status FROM disk_encryption;'],
+            ['Connected monitors', 'Connected monitors (Linux)',
+             'SELECT connector, preferred_mode, status, bytes FROM glpi_edid;'],
+        ] as [$from, $to, $sql]
+    ) {
+        $DB->update(
+            GlpiPlugin\Glpiosquery\SavedQuery::getTable(),
+            ['name' => $to],
+            ['name' => $from, 'sql_query' => $sql]
+        );
+    }
+
+    // Existing secrets predate the rule that carries their entity, and the
+    // assets they produced are in whatever entity GLPI defaulted to. This puts
+    // the routing in place for everything they enrol from here on; assets
+    // already imported into the wrong entity have to be moved, because GLPI
+    // only moves an asset between entities when a transfer model is configured.
+    foreach (
+        $DB->request([
+            'FROM'  => GlpiPlugin\Glpiosquery\EnrollSecret::TABLE,
+            'WHERE' => ['is_active' => 1, ['NOT' => ['entities_id' => 0]]],
+        ]) as $secret
+    ) {
+        GlpiPlugin\Glpiosquery\EnrollSecret::syncEntityRule($secret);
+    }
 }
 
 /**
@@ -736,6 +841,24 @@ function plugin_glpiosquery_uninstall()
     /** @var DBmysql $DB */
     global $DB;
 
+    // Collected before the tables go, because the rules are found by a uuid
+    // derived from the secret's id and the deletion below takes the secrets
+    // with it.
+    $enroll_rule_ids = [];
+    if ($DB->tableExists(GlpiPlugin\Glpiosquery\EnrollSecret::TABLE)) {
+        foreach (
+            $DB->request([
+                'SELECT' => ['id'],
+                'FROM'   => GlpiPlugin\Glpiosquery\EnrollSecret::TABLE,
+            ]) as $secret
+        ) {
+            $rules_id = GlpiPlugin\Glpiosquery\EnrollSecret::ruleIdFor((int) $secret['id']);
+            if ($rules_id !== null) {
+                $enroll_rule_ids[] = $rules_id;
+            }
+        }
+    }
+
     foreach (
         [
             'glpi_plugin_glpiosquery_packages',
@@ -759,12 +882,21 @@ function plugin_glpiosquery_uninstall()
 
     CronTask::unregister('glpiosquery');
 
+    // The entity rules this plugin created. Left behind they would route the
+    // tag of a secret that no longer exists, in a collection where order
+    // carries meaning — dead weight at best, and a puzzle for whoever reads it
+    // next. Read before the tables go, hence the order in this function.
+    foreach ($enroll_rule_ids as $rules_id) {
+        (new RuleImportEntity())->delete(['id' => $rules_id], true);
+    }
+
     foreach (
         [
             'plugin_glpiosquery_agent',
             'plugin_glpiosquery_pack',
             'plugin_glpiosquery_livequery',
             'plugin_glpiosquery_rawsql',
+            'plugin_glpiosquery_extension',
         ] as $right
     ) {
         ProfileRight::deleteProfileRights([$right]);

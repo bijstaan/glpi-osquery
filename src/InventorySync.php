@@ -9,6 +9,7 @@ namespace GlpiPlugin\Glpiosquery;
 use CronTask;
 use Glpi\Inventory\Inventory;
 use GlpiPlugin\Glpiosquery\Inventory\Assembler;
+use GlpiPlugin\Glpiosquery\Inventory\UserMatch;
 
 /**
  * Turns collected snapshots into GLPI assets.
@@ -115,6 +116,11 @@ final class InventorySync
         }
 
         $document = Assembler::forAgent($agent);
+        if ($document !== null) {
+            // Done here rather than in the Assembler, which is a translator
+            // with no business asking the database who anybody is.
+            $document = UserMatch::apply($document);
+        }
         if ($document === null) {
             // Nothing usable yet (no anchor query). Clear the flag so we do not
             // spin on it every cron run; the next result batch sets it again.

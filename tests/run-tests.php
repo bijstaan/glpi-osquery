@@ -29,6 +29,7 @@ if (!function_exists('__')) {
 
 require_once __DIR__ . '/../src/Inventory/Edid.php';
 require_once __DIR__ . '/../src/Inventory/Assembler.php';
+require_once __DIR__ . '/../src/EnrollSecret.php';
 require_once __DIR__ . '/../src/QueryCatalog.php';
 require_once __DIR__ . '/../src/AgentUpdate.php';
 require_once __DIR__ . '/../src/Compliance.php';
@@ -57,6 +58,7 @@ use GlpiPlugin\Glpiosquery\Extension;
 use GlpiPlugin\Glpiosquery\Node;
 use GlpiPlugin\Glpiosquery\TicketEvidence;
 use GlpiPlugin\Glpiosquery\Inventory\Assembler;
+use GlpiPlugin\Glpiosquery\EnrollSecret;
 use GlpiPlugin\Glpiosquery\Inventory\Edid;
 use GlpiPlugin\Glpiosquery\QueryCatalog;
 
@@ -90,9 +92,15 @@ function section(string $name): void
 /** Build an inventory document from a fake snapshot set. */
 function assemble(array $snapshots): array
 {
-    $agent = ['id' => 1, 'deviceid' => 'osquery-test-abc123'];
+    return document($snapshots)['content'];
+}
 
-    return (new Assembler($agent, $snapshots))->build()['content'];
+/** The whole document, envelope included. */
+function document(array $snapshots, array $agent = []): array
+{
+    $agent += ['id' => 1, 'deviceid' => 'osquery-test-abc123'];
+
+    return (new Assembler($agent, $snapshots))->build();
 }
 
 // ---------------------------------------------------------------------- EDID
@@ -776,6 +784,90 @@ check('os version is not compared', $flags['os'] ?? true, false);
 check('uptime is not compared', $flags['uptime'] ?? true, false);
 check('memory is compared', $flags['memory'] ?? true, true);
 check('disk is compared', $flags['disk'] ?? true, true);
+
+// ------------------------------------------------------- Windows adapters
+section('Windows adapters');
+
+// On Windows `interface` is the adapter index, not a name, and the name is in
+// one of three other columns depending on the release. Reading the index as a
+// name is what put ports called "13" in GLPI.
+$content = assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_interface_details_windows' => [[
+        'interface' => '13', 'mac' => 'aa:bb:cc:dd:ee:ff', 'enabled' => '1',
+        'connection_id' => 'Ethernet', 'friendly_name' => 'Ethernet 2',
+        'description' => 'Intel(R) Ethernet Connection I219-LM', 'physical_adapter' => '1',
+    ]],
+]);
+check('the port is named for its connection', $content['networks'][0]['description'], 'Ethernet');
+check('the adapter itself is the model', $content['networks'][0]['model'], 'Intel(R) Ethernet Connection I219-LM');
+check('a physical adapter is not virtual', $content['networks'][0]['virtualdev'], false);
+
+// Only the hardware description populated — the case the fleet actually
+// reported — must still beat the index.
+$content = assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_interface_details_windows' => [[
+        'interface' => '13', 'mac' => 'aa:bb:cc:dd:ee:ff', 'enabled' => '1',
+        'connection_id' => '', 'friendly_name' => '',
+        'description' => 'Intel(R) Wi-Fi 6E AX211 160MHz', 'physical_adapter' => '0',
+    ]],
+]);
+check('the description is used when nothing better exists',
+    $content['networks'][0]['description'], 'Intel(R) Wi-Fi 6E AX211 160MHz');
+check('a non-physical adapter is marked virtual', $content['networks'][0]['virtualdev'], true);
+
+// The index is still the join key for addresses, which is the reason it cannot
+// simply be replaced by the label.
+$content = assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_interface_details_windows' => [[
+        'interface' => '13', 'mac' => 'aa:bb:cc:dd:ee:ff', 'enabled' => '1',
+        'connection_id' => 'Wi-Fi', 'description' => 'Intel(R) Wi-Fi 6E AX211 160MHz',
+    ]],
+    'inv_interface_addresses' => [['interface' => '13', 'address' => '10.0.0.5', 'mask' => '255.255.255.0']],
+]);
+check('addresses still join on the interface index', $content['networks'][0]['ipaddress'] ?? '', '10.0.0.5');
+check('and the joined entry keeps the readable name', $content['networks'][0]['description'], 'Wi-Fi');
+
+// POSIX is untouched: the Windows columns are absent, so the chain falls
+// through to the interface name.
+$content = assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_interface_details' => [['interface' => 'eth0', 'mac' => 'aa:bb:cc:dd:ee:ff', 'flags' => '4163']],
+]);
+check('POSIX interfaces keep their own name', $content['networks'][0]['description'], 'eth0');
+
+// Windows has neither pci_devices nor usb_devices, so components came from
+// nowhere at all until drivers was added.
+$content = assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_drivers' => [[
+        'device_name' => 'Synaptics FP Sensors', 'description' => 'Biometric device',
+        'class' => 'Biometric', 'manufacturer' => 'Synaptics', 'provider' => 'Synaptics',
+        'service' => 'SynaFpSensor', 'version' => '6.0.1.2',
+    ]],
+]);
+check('a Windows device becomes a controller', $content['controllers'][0]['name'] ?? '', 'Synaptics FP Sensors');
+check('with its class as the type', $content['controllers'][0]['type'] ?? '', 'Biometric');
+check('and its driver service', $content['controllers'][0]['driver'] ?? '', 'SynaFpSensor');
+
+// --------------------------------------------------------- enrolment tag
+section('Enrolment tag');
+
+// The tag is the only thing in the document that says which entity the machine
+// belongs to: GLPI decides that from the entity rules alone, and the rules can
+// only see the tag. A document without one imports into the default entity,
+// which is how an agent enrolled against a sub-entity's secret ended up in the
+// root.
+$tagged = document([], ['plugin_glpiosquery_enrollsecrets_id' => 7]);
+check('the document carries the enrolling secret\'s tag', $tagged['tag'] ?? null, 'osq-7');
+
+$untagged = document([], ['plugin_glpiosquery_enrollsecrets_id' => 0]);
+check('an agent with no recorded secret carries no tag', isset($untagged['tag']), false);
+
+check('the tag is derived from the id, not the name', EnrollSecret::tagFor(42), 'osq-42');
+check('id 0 has no tag', EnrollSecret::tagFor(0), null);
 
 // ------------------------------------------------------------------ summary
 printf("\n%d passed, %d failed\n", $passed, $failed);

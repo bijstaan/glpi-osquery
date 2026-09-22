@@ -275,10 +275,15 @@ class SavedQuery extends CommonDBTM
                 'name'        => 'Who is logged in',
                 'description' => 'Interactive sessions on the machine right now.',
                 'platform'    => 'all',
-                'sql_query'   => "SELECT user, tty, host, datetime(time, 'unixepoch') AS since FROM logged_in_users WHERE type = 'user';",
+                // See DefaultPacks::inventoryQueries() — `type` is a utmp record
+                // type on POSIX and a session state on Windows, so keeping only
+                // 'user' returns nothing at all on Windows.
+                'sql_query'   => "SELECT user, tty, host, type, datetime(time, 'unixepoch') AS since "
+                               . "FROM logged_in_users WHERE user != '' AND type NOT IN "
+                               . "('boot_time', 'runlevel', 'new_time', 'old_time', 'init', 'login', 'dead', 'empty');",
             ],
             [
-                'name'        => 'Disk space',
+                'name'        => 'Disk space (Linux/macOS)',
                 'description' => 'Mounted filesystems with free space, largest first.',
                 'platform'    => 'linux,darwin',
                 'sql_query'   => "SELECT path, type, round((blocks * blocks_size) / 1073741824.0, 1) AS total_gb, "
@@ -307,22 +312,84 @@ class SavedQuery extends CommonDBTM
                 'sql_query'   => 'SELECT days, hours, minutes, total_seconds FROM uptime;',
             ],
             [
-                'name'        => 'Recently installed packages',
-                'description' => 'Debian/Ubuntu packages, newest first — useful after an unexpected change.',
+                'name'        => 'Installed packages (Debian/Ubuntu)',
+                'description' => 'Debian/Ubuntu packages. Empty on an RPM distribution — see the RPM query.',
                 'platform'    => 'linux',
                 'sql_query'   => 'SELECT name, version, arch, size FROM deb_packages ORDER BY name;',
             ],
             [
-                'name'        => 'Disk encryption status',
+                'name'        => 'Disk encryption (Linux/macOS)',
                 'description' => 'Whether each volume is encrypted.',
                 'platform'    => 'linux,darwin',
                 'sql_query'   => 'SELECT name, encrypted, type, encryption_status FROM disk_encryption;',
             ],
             [
-                'name'        => 'Connected monitors',
-                'description' => 'Displays attached to the machine. Needs the glpi-edid extension shipped with the agent.',
+                'name'        => 'Connected monitors (Linux)',
+                'description' => 'Displays attached to the machine. Needs the glpi-edid extension shipped with '
+                               . 'the agent: osquery has no monitor table on Linux at all.',
                 'platform'    => 'linux',
                 'sql_query'   => 'SELECT connector, preferred_mode, status, bytes FROM glpi_edid;',
+            ],
+
+            // Windows and macOS equivalents for the queries above that can only
+            // ever answer on one platform.
+            //
+            // A saved query holds one statement and one platform, so parity is
+            // siblings rather than a clever statement: selectable() hides the
+            // ones a device cannot answer, so a technician looking at a Windows
+            // machine sees exactly one "Connected monitors", and the fleet
+            // console — which has no platform to filter by — shows all three
+            // with their platform in the name.
+            [
+                'name'        => 'Disk space (Windows)',
+                'description' => 'Fixed drives with free space, largest first.',
+                'platform'    => 'windows',
+                'sql_query'   => 'SELECT device_id, file_system, round(size / 1073741824.0, 1) AS total_gb, '
+                               . 'round(free_space / 1073741824.0, 1) AS free_gb '
+                               . 'FROM logical_drives WHERE size > 0 ORDER BY total_gb DESC;',
+            ],
+            [
+                'name'        => 'Installed programs (Windows)',
+                'description' => 'Everything in Add/Remove Programs, newest first.',
+                'platform'    => 'windows',
+                'sql_query'   => 'SELECT name, version, publisher, install_date FROM programs '
+                               . 'ORDER BY install_date DESC, name;',
+            ],
+            [
+                'name'        => 'Installed applications (macOS)',
+                'description' => 'Applications with their bundle versions.',
+                'platform'    => 'darwin',
+                'sql_query'   => 'SELECT name, bundle_short_version, bundle_identifier, path FROM apps '
+                               . 'ORDER BY name;',
+            ],
+            [
+                'name'        => 'Installed packages (RPM)',
+                'description' => 'RPM packages, for the Red Hat and SUSE families where deb_packages is empty.',
+                'platform'    => 'linux',
+                'sql_query'   => 'SELECT name, version, release, arch, size FROM rpm_packages ORDER BY name;',
+            ],
+            [
+                'name'        => 'Disk encryption (Windows)',
+                'description' => 'BitLocker status per volume.',
+                'platform'    => 'windows',
+                'sql_query'   => 'SELECT drive_letter, protection_status, conversion_status, '
+                               . 'encryption_method, percentage_encrypted FROM bitlocker_info;',
+            ],
+            [
+                'name'        => 'Connected monitors (Windows)',
+                'description' => 'Displays attached to the machine, as raw EDID from the registry — osquery '
+                               . 'has no monitor table on Windows either. The same rows the inventory decodes.',
+                'platform'    => 'windows',
+                'sql_query'   => 'SELECT path, data FROM registry '
+                               . "WHERE key LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\%\\%\\Device Parameters' "
+                               . "AND name = 'EDID';",
+            ],
+            [
+                'name'        => 'Connected monitors (macOS)',
+                'description' => 'Displays attached to the machine, from osquery\'s own table.',
+                'platform'    => 'darwin',
+                'sql_query'   => 'SELECT name, vendor_id, product_id, serial_number, resolution, '
+                               . 'connection_type, main FROM connected_displays;',
             ],
         ];
 
