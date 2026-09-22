@@ -275,7 +275,7 @@ final class Node
         $rows = $DB->request([
             'SELECT' => [
                 'q.name AS qname', 'q.sql_query', 'q.query_interval', 'q.is_snapshot', 'q.platform',
-                'q.min_agent_version', 'q.requires_table',
+                'q.min_agent_version', 'q.requires_table', 'q.glpi_section',
             ],
             'FROM'   => 'glpi_plugin_glpiosquery_queries AS q',
             'INNER JOIN' => [
@@ -316,16 +316,7 @@ final class Node
                 continue;
             }
 
-            $entry = [
-                'query'    => $row['sql_query'],
-                'interval' => (int) $row['query_interval'],
-                'snapshot' => (bool) $row['is_snapshot'],
-            ];
-            if ($row['platform'] !== 'all' && $row['platform'] !== '') {
-                $entry['platform'] = $row['platform'];
-            }
-
-            $schedule[$row['qname']] = $entry;
+            $schedule[$row['qname']] = self::scheduleEntry($row);
         }
 
         $settings = Config::getConfigurationValues(PLUGIN_GLPIOSQUERY_CONFIG_CONTEXT);
@@ -347,6 +338,42 @@ final class Node
             ],
             'node_invalid' => false,
         ];
+    }
+
+    /**
+     * One query's entry in the served schedule.
+     *
+     * Inventory queries carry `startup_priority`, which makes osqueryd run them
+     * once as soon as it starts. Without it the first run waits for the
+     * scheduler: osquery fires a query when the unix time is a multiple of its
+     * splayed interval, so a daily query first ran anything up to ~26 hours
+     * after enrolment — a new machine sat in GLPI with no software for a day
+     * and looked broken. The cost is one pack run per osqueryd start, which a
+     * self-update rollout already staggers by ring.
+     *
+     * Only inventory queries get it. Security and saved queries keep osquery's
+     * own schedule: nothing is waiting on their first answer.
+     *
+     * @param array<string,mixed> $row a joined query row from configFor()
+     * @return array<string,mixed>
+     */
+    public static function scheduleEntry(array $row): array
+    {
+        $entry = [
+            'query'    => $row['sql_query'],
+            'interval' => (int) $row['query_interval'],
+            'snapshot' => (bool) $row['is_snapshot'],
+        ];
+        if ($row['platform'] !== 'all' && $row['platform'] !== '') {
+            $entry['platform'] = $row['platform'];
+        }
+        if ((string) ($row['glpi_section'] ?? '') !== '') {
+            // One value for all of them: osquery breaks ties by name, and no
+            // inventory query needs to beat another.
+            $entry['startup_priority'] = 1;
+        }
+
+        return $entry;
     }
 
     /**

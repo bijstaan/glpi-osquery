@@ -648,6 +648,16 @@ foreach (
     check('gate: ' . $what, Node::versionAtLeast(['agent_version' => $have], $min), $want);
 }
 
+// Inventory queries run at osqueryd start. Without startup_priority a daily
+// query first ran up to ~26h after enrolment, so a new machine had no software.
+$row = ['sql_query' => 'SELECT 1;', 'query_interval' => 86400, 'is_snapshot' => 1, 'platform' => 'windows'];
+check('inventory query runs at startup',
+    Node::scheduleEntry($row + ['glpi_section' => 'softwares'])['startup_priority'] ?? null, 1);
+check('non-inventory query keeps osquery\'s schedule',
+    array_key_exists('startup_priority', Node::scheduleEntry($row + ['glpi_section' => null])), false);
+check('schedule entry keeps its platform',
+    Node::scheduleEntry($row)['platform'] ?? null, 'windows');
+
 // --------------------------------------------------------- ticket evidence
 section('ticket evidence');
 
