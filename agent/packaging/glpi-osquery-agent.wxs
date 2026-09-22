@@ -27,7 +27,7 @@
   Variables supplied by build-msi.sh:
     Version      MSI ProductVersion — numeric only, e.g. 1.0.1
     FullVersion  the agent's own version string, e.g. 1.0.1-rc1
-    StageDir     directory holding bin/ from the bundle
+    StageDir     directory holding bin/ and certs/ from the bundle
 
   Version and FullVersion are separate on purpose. MSI's ProductVersion cannot
   carry a prerelease suffix, but the versioned directory must be named exactly
@@ -121,6 +121,26 @@
                         KeyPath="yes" />
                 </Component>
 
+              </Directory>
+
+              <!--
+                osquery's CA bundle, beside the binaries rather than in bin/ so
+                it matches the layout osquery's own package uses.
+
+                It is here because osqueryd verifies TLS with OpenSSL and reads
+                no Windows certificate store at all: without a bundle named in
+                the flagfile it starts with no trust anchors and every TLS
+                endpoint fails verification, including ordinary publicly
+                trusted ones. Installed as part of the versioned directory so a
+                self-update refreshes the anchors with the rest of the tree.
+              -->
+              <Directory Id="CertsDir" Name="certs">
+                <Component Id="Certs" Guid="dce1b95c-2588-4e59-a1ff-9b97a081b774" Win64="yes">
+                  <File Id="certs.pem"
+                        Name="certs.pem"
+                        Source="$(var.StageDir)/certs/certs.pem"
+                        KeyPath="yes" />
+                </Component>
               </Directory>
             </Directory>
           </Directory>
@@ -232,6 +252,7 @@
     <Feature Id="Main" Title="GLPI osquery Agent" Level="1">
       <ComponentRef Id="AgentExe" />
       <ComponentRef Id="OsquerydExe" />
+      <ComponentRef Id="Certs" />
     </Feature>
   </Product>
 </Wix>

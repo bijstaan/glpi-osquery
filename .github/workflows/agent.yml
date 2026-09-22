@@ -320,6 +320,13 @@ jobs:
           if (-not (Test-Path "$root\current\bin\glpi-osquery-agent.exe")) { throw "current junction missing or broken" }
           if (-not (Test-Path "$root\current\bin\osqueryd.exe")) { throw "osqueryd missing from the bundle" }
 
+          # osqueryd reads no Windows certificate store: without this bundle it
+          # starts with no trust anchors at all and every TLS endpoint fails
+          # verification, which looks like a server-side certificate problem
+          # from the endpoint and like an agent that never enrols from GLPI.
+          if (-not (Test-Path "$root\versions\$env:VERSION\certs\certs.pem")) { throw "CA bundle missing from the versioned tree" }
+          if (-not (Test-Path "$root\current\certs\certs.pem")) { throw "CA bundle not reachable through the junction" }
+
           # sc.exe, not Get-CimInstance Win32_Service. The SCM finishes deleting
           # a service only once the last handle to it is closed, and a WMI query
           # leaves WmiPrvSE holding one — so asking WMI about the service here is

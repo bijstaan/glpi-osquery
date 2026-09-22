@@ -109,6 +109,13 @@ table ServiceInstall \
   | awk -F'\t' '$2=="GLPIOsqueryAgent" && $5==3 {found=1} END{exit !found}' \
   || fail "the service is missing or set to auto-start before enrolment"
 
+# The CA bundle. osqueryd reads no Windows certificate store, so a package
+# without this installs an agent whose every TLS request fails verification
+# against certificates the rest of the machine trusts — and the failure surfaces
+# only at enrolment, on the endpoint, as "certificate verify failed".
+table File | awk -F'\t' '$1=="certs.pem" && $3=="certs.pem" {found=1} END{exit !found}' \
+  || fail "the osquery CA bundle is not in the package"
+
 # 3090 = deferred (1024) + no-impersonate (2048) + run an installed file (18).
 # Without no-impersonate it would run as the invoking user and be unable to
 # configure a service; without deferred it could not run elevated at all.

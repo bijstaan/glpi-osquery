@@ -128,8 +128,31 @@ func (s *Supervisor) WriteFlagfile() error {
 		"--disable_events=false",
 	}
 
-	if s.cfg.CACertPath != "" {
+	// Always name a trust store, because osqueryd has no usable default.
+	//
+	// It verifies with OpenSSL, which reads no operating-system store — on
+	// Windows the compiled-in fallback directory does not even exist, so every
+	// TLS endpoint fails verification against certificates the rest of the
+	// machine trusts without question. The Go side of this agent is unaffected,
+	// which is why the symptom is an agent that enrols and updates perfectly
+	// while osqueryd alone reports "certificate verify failed".
+	//
+	// A CA supplied by an administrator wins: osqueryd takes one file, so a
+	// private root replaces the public bundle rather than joining it.
+	switch {
+	case s.cfg.CACertPath != "":
 		flags = append(flags, "--tls_server_certs="+s.cfg.CACertPath)
+	default:
+		certs := s.cfg.BundledCertsPath()
+		if _, err := os.Stat(certs); err == nil {
+			flags = append(flags, "--tls_server_certs="+certs)
+		} else {
+			// Worth a warning rather than a silent fall-through: without it
+			// osqueryd trusts nothing, and the only evidence is an enrolment
+			// that never completes.
+			s.log.Warn("no CA bundle at the expected path; osqueryd will have no trust anchors",
+				"path", certs, "err", err)
+		}
 	}
 
 	// What osqueryd should autoload: our own bundled extension, named

@@ -27,7 +27,10 @@ type Config struct {
 	EnrollSecret string `json:"enroll_secret"`
 
 	// CACertPath is an optional PEM bundle for a private CA. Empty means use
-	// the system trust store.
+	// the bundle that ships with osqueryd — see BundledCertsPath. osqueryd
+	// takes a single file, so this *replaces* the public trust anchors rather
+	// than adding to them: a GLPI behind a private CA needs only its own root
+	// here, and one behind a public certificate needs nothing at all.
 	CACertPath string `json:"ca_cert_path,omitempty"`
 
 	// OsquerydPath is the bundled osqueryd this agent supervises.
@@ -132,6 +135,21 @@ func Save(path string, cfg *Config) error {
 	}
 
 	return os.WriteFile(path, body, 0o600)
+}
+
+// BundledCertsPath is the CA bundle that travels with osqueryd.
+//
+// osqueryd is an OpenSSL client and reads no operating-system trust store: not
+// the Windows certificate store, and not whatever the host distribution keeps
+// in /etc/ssl. Left to itself it falls back to a directory fixed when its
+// OpenSSL was compiled, which on Windows does not exist — so verification fails
+// for every server, and tls_enroll.cpp reports it as "certificate verify
+// failed" with nothing to say that the trust store was simply empty.
+//
+// build.sh stages osquery's own bundle here for that reason, and it is named in
+// the flagfile whenever an administrator has not supplied a CA of their own.
+func (c *Config) BundledCertsPath() string {
+	return filepath.Join(c.InstallRoot, "current", "certs", "certs.pem")
 }
 
 // TokenPath is where the per-agent credential is cached between runs.

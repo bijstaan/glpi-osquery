@@ -57,6 +57,13 @@ Write-Host "==> installing version $version"
 $versionDir = Join-Path $InstallRoot "versions\$version"
 New-Item -ItemType Directory -Force -Path (Join-Path $versionDir 'bin') | Out-Null
 Copy-Item (Join-Path $here 'bin\*') (Join-Path $versionDir 'bin') -Force
+
+# osqueryd verifies TLS with OpenSSL, which reads no Windows certificate store
+# and falls back to a compiled-in directory that does not exist here. Without
+# this bundle it has no trust anchors at all and enrolment fails against a
+# perfectly ordinary certificate, so the copy is not optional.
+New-Item -ItemType Directory -Force -Path (Join-Path $versionDir 'certs') | Out-Null
+Copy-Item (Join-Path $here 'certs\*') (Join-Path $versionDir 'certs') -Force
 Set-Content -Path (Join-Path $versionDir 'VERSION') -Value $version
 
 # A junction rather than a symlink: creating a symlink needs either developer

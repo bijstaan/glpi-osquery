@@ -38,6 +38,38 @@ fetch() {
   curl -fsSL -o "$dest" "$url"
 }
 
+# osquery's CA bundle, which every one of its own packages ships and which the
+# agent needs on every platform — see certs_pem below for why.
+#
+# Cached from whichever archive was unpacked first: the file is byte-identical
+# across osquery's Linux and Windows packages for a given release (verified for
+# 5.19.0), so no target has to fetch an archive it would not otherwise want.
+cache_certs() {
+  local src="$1"
+  local out="$CACHE/certs-${OSQUERY_VERSION}.pem"
+  if [[ ! -f "$out" && -f "$src" ]]; then
+    cp "$src" "$out"
+  fi
+}
+
+# The bundle, fetched on its own if nothing has cached one yet.
+#
+# Only a macOS-only build reaches the fetch: the bare macOS tarball is the one
+# asset osquery publishes that carries no certificates at all.
+certs_pem() {
+  local out="$CACHE/certs-${OSQUERY_VERSION}.pem"
+  if [[ ! -f "$out" ]]; then
+    local deb="$CACHE/osquery_${OSQUERY_VERSION}_amd64.deb"
+    fetch "${RELEASES}/osquery_${OSQUERY_VERSION}-1.linux_amd64.deb" "$deb"
+    local tmp
+    tmp="$(mktemp -d)"
+    dpkg-deb -x "$deb" "$tmp"
+    cp "$tmp/opt/osquery/share/osquery/certs/certs.pem" "$out"
+    rm -rf "$tmp"
+  fi
+  echo "$out"
+}
+
 # osqueryd, per platform, from osquery's own release assets.
 #
 # Every platform has a plain archive published alongside the installers, so
@@ -59,6 +91,7 @@ osqueryd_for() {
       fetch "${RELEASES}/osquery_${OSQUERY_VERSION}-1.linux_${deb_arch}.deb" "$deb"
       dpkg-deb -x "$deb" "$tmp"
       cp "$tmp/opt/osquery/bin/osqueryd" "$out"
+      cache_certs "$tmp/opt/osquery/share/osquery/certs/certs.pem"
       ;;
 
     darwin)
@@ -76,6 +109,7 @@ osqueryd_for() {
       fetch "${RELEASES}/osquery-${OSQUERY_VERSION}.windows_${win_arch}.zip" "$zip"
       unzip -q -o "$zip" -d "$tmp"
       cp "$tmp/osquery-${OSQUERY_VERSION}.windows_${win_arch}/Program Files/osquery/osqueryd/osqueryd.exe" "$out"
+      cache_certs "$tmp/osquery-${OSQUERY_VERSION}.windows_${win_arch}/Program Files/osquery/certs/certs.pem"
       ;;
 
     *)
@@ -128,6 +162,17 @@ for target in "${TARGETS[@]}"; do
   osqueryd="$(osqueryd_for "$GOOS" "$GOARCH")"
   cp "$osqueryd" "$stage/bin/osqueryd${ext}"
   chmod 0755 "$stage/bin/osqueryd${ext}"
+
+  # osqueryd verifies TLS with OpenSSL, whose default trust store is a
+  # directory fixed at compile time. On Windows that directory does not exist,
+  # so osqueryd starts with an empty set of trust anchors and every TLS
+  # endpoint fails verification — including a perfectly ordinary publicly
+  # trusted certificate, which is what makes it look like a server problem.
+  # osquery's own packages ship this bundle for exactly that reason; ours
+  # carries it on every platform so the flagfile can name it unconditionally
+  # and the agent trusts the same anchors everywhere.
+  mkdir -p "$stage/certs"
+  cp "$(certs_pem)" "$stage/certs/certs.pem"
 
   # Platform service definitions and installers travel with the bundle so the
   # same artifact can be laid down by a package or by hand.
