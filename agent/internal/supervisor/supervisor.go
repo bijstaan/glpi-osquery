@@ -113,14 +113,16 @@ func (s *Supervisor) WriteFlagfile() error {
 		"--logger_path=" + filepath.Join(s.cfg.StateDir, "logs"),
 		"--pidfile=" + filepath.Join(s.cfg.StateDir, "osqueryd.pid"),
 
-		// Keep the extension socket inside our own state directory.
+		// The extension manager's endpoint, which is a different kind of
+		// thing per platform — see Config.ExtensionSocketPath.
 		//
-		// osquery defaults this to /var/osquery/osquery.em, a directory created
-		// by osquery's own package — which we deliberately do not install,
-		// because the bundle ships its own osqueryd. On any normal target that
-		// directory is absent, so the extension manager fails to start with
-		// "Extension socket directory missing" and every extension table is
-		// silently unavailable.
+		// On Unix osquery defaults it to /var/osquery/osquery.em, a directory
+		// created by osquery's own package, which we deliberately do not
+		// install because the bundle ships its own osqueryd; on any normal
+		// target that directory is absent, the extension manager fails to
+		// start with "Extension socket directory missing", and every extension
+		// table is silently unavailable. On Windows it is a named pipe and a
+		// filesystem path is not merely a bad choice but an invalid value.
 		"--extensions_socket=" + s.cfg.ExtensionSocketPath(),
 
 		// Evented tables are the main thing a resident daemon buys over a

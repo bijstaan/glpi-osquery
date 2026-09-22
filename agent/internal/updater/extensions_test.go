@@ -240,3 +240,53 @@ func TestExtensionsNilIsDistinctFromEmpty(t *testing.T) {
 		t.Errorf("an empty list must decode as present and empty, got %v", empty.Extensions)
 	}
 }
+
+// A package published against the wrong platform row passes its checksum and
+// is still unrunnable. The server cannot catch it — extensions are published
+// by URL, so GLPI never holds the bytes — which leaves the agent as the only
+// place the mistake can be named rather than merely suffered.
+func TestRunnableHereRefusesANonPEOnWindows(t *testing.T) {
+	dir := t.TempDir()
+
+	elf := filepath.Join(dir, "linux-build")
+	if err := os.WriteFile(elf, []byte("\x7fELF\x02\x01\x01"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pe := filepath.Join(dir, "windows-build")
+	if err := os.WriteFile(pe, []byte("MZ\x90\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stub := filepath.Join(dir, "script")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runnableHere(elf, "windows"); err == nil {
+		t.Error("an ELF binary was accepted as a Windows extension")
+	}
+	if err := runnableHere(pe, "windows"); err != nil {
+		t.Errorf("a PE binary was refused on Windows: %v", err)
+	}
+
+	// Unix executes autoloaded extensions, so a shebang script is legitimate
+	// and nothing here may reject it.
+	for _, goos := range []string{"linux", "darwin"} {
+		for _, path := range []string{elf, stub} {
+			if err := runnableHere(path, goos); err != nil {
+				t.Errorf("%s refused %s: %v", goos, filepath.Base(path), err)
+			}
+		}
+	}
+}
+
+// A truncated or empty download must not be read as a PE by accident.
+func TestRunnableHereRefusesATruncatedPackage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runnableHere(path, "windows"); err == nil {
+		t.Error("an empty package was accepted as a Windows extension")
+	}
+}

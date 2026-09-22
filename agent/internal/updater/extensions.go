@@ -6,6 +6,7 @@ package updater
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -50,6 +51,41 @@ func extensionFilename(name string) string {
 	}
 
 	return name + ".ext"
+}
+
+// runnableHere refuses a package the platform could not execute.
+//
+// Windows only, and deliberately: a Windows machine can run nothing but a PE
+// image, so a Linux build published against the windows/amd64 row lands as
+// `<name>.ext.exe`, osqueryd tries to autoload it, and the extension's tables
+// are simply never there — with one line in osqueryd's log and nothing in GLPI
+// to say the package was the wrong one. Two bytes turn that into a refusal
+// that names the extension.
+//
+// Not applied to Unix, where a shebang script is a legitimate extension:
+// osqueryd executes autoloaded extensions rather than dlopening them, so there
+// is no magic number a Unix extension is obliged to carry.
+func runnableHere(path, goos string) error {
+	if goos != "windows" {
+		return nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var magic [2]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		return fmt.Errorf("read the package header: %w", err)
+	}
+
+	if magic != [2]byte{'M', 'Z'} {
+		return fmt.Errorf("not a Windows executable (header %q): check the platform it was published under", magic)
+	}
+
+	return nil
 }
 
 func (u *Updater) statePath() string {
@@ -218,6 +254,14 @@ func (u *Updater) installExtension(ext client.Extension, name, dest string) erro
 	// download verifies the checksum and refuses a package without one, which
 	// is the whole basis on which this is allowed to run as root.
 	if err := u.download(pkg, staging); err != nil {
+		return err
+	}
+
+	// The checksum proves the file is the one that was published. It says
+	// nothing about whether the publisher attached the right file, and the
+	// server cannot tell either: packages are published by URL, so GLPI never
+	// holds the bytes and has only the platform the administrator picked.
+	if err := runnableHere(staging, runtime.GOOS); err != nil {
 		return err
 	}
 

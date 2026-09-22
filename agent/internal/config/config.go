@@ -201,9 +201,12 @@ func (c *Config) ExtensionStatePath() string {
 
 // ExtensionSocketPath is the osquery extension manager socket.
 //
-// Deliberately inside our state directory rather than osquery's default
-// /var/osquery, which does not exist unless osquery's own package created it —
-// and this agent bundles osqueryd instead of installing that package.
+// Not the same kind of thing on both platforms, which is why it is delegated
+// rather than joined here. On Unix it is a socket file, put inside our state
+// directory rather than osquery's default /var/osquery — a directory that does
+// not exist unless osquery's own package created it, and this agent bundles
+// osqueryd instead of installing that package. On Windows it is a named pipe,
+// which is not a filesystem path at all and cannot be made into one.
 func (c *Config) ExtensionSocketPath() string {
-	return filepath.Join(c.StateDir, "osquery.em")
+	return extensionSocket(c.StateDir)
 }

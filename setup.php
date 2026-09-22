@@ -48,6 +48,13 @@ function plugin_init_glpiosquery()
 
     $PLUGIN_HOOKS['csrf_compliant']['glpiosquery'] = true;
 
+    // The plugin's rights, on Administration > Profiles.
+    //
+    // Core stores a plugin's rights and saves them back with its own, but
+    // renders a form for its rights only — so without this tab the ones below
+    // are enforced everywhere and grantable nowhere but SQL.
+    Plugin::registerClass(\GlpiPlugin\Glpiosquery\Profile::class, ['addtabon' => ['Profile']]);
+
     // The osquery endpoints are machine-to-machine: authenticated by enrollment
     // secret or node key, never by a GLPI session.
     //
