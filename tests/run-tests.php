@@ -304,6 +304,21 @@ $content = assemble([
 check('nameless software is skipped', count($content['softwares']), 1);
 check('named software survives beside it', $content['softwares'][0]['name'], 'Thing');
 
+// Boot time comes from when the uptime was measured, so it holds still across
+// rebuilds however late the assembly runs.
+$measured = 1_760_000_000;
+$bootAt = static fn(int $uptime, int $at): ?string => (new Assembler(
+    ['id' => 1, 'deviceid' => 'osquery-test-abc123'],
+    [
+        'inv_system_info' => [['hostname' => 'unit-test']],
+        'inv_os_version'  => [['name' => 'Windows Server 2022', 'platform' => 'windows']],
+        'inv_uptime'      => [['total_seconds' => (string) $uptime]],
+    ],
+    ['inv_uptime' => $at]
+))->build()['content']['operatingsystem']['boot_time'] ?? null;
+check('boot time is measured time minus uptime', $bootAt(86400, $measured), date('Y-m-d H:i:00', $measured - 86400));
+check('an hour later with a second of jitter, same boot time', $bootAt(89999, $measured + 3600), $bootAt(86400, $measured));
+
 // NUL bytes arrive in real captures (AMD cpu_brand) and must not survive.
 $content = assemble([
     'inv_system_info' => [['hostname' => 'unit-test', 'cpu_brand' => "AMD Ryzen 7\0\0", 'cpu_physical_cores' => '8']],
@@ -401,6 +416,36 @@ $content = assemble([
 ]);
 check('windows interactive users deduplicated', count($content['users']), 1);
 check('windows user domain captured', $content['users'][0]['domain'], 'CORP');
+
+// Windows' own logons are Interactive too, and used to become the linked user.
+$content = assemble([
+    'inv_system_info'    => [['hostname' => 'win-box']],
+    'inv_logon_sessions' => [
+        ['user' => 'UMFD-0', 'logon_domain' => 'Font Driver Host', 'logon_time' => '100'],
+        ['user' => 'DWM-1', 'logon_domain' => 'Window Manager', 'logon_time' => '101'],
+        ['user' => 'olduser', 'logon_domain' => 'CORP', 'logon_time' => '200'],
+        ['user' => 'jbloggs', 'logon_domain' => 'CORP', 'logon_time' => '300'],
+    ],
+]);
+check('system logons are not users', array_column($content['users'], 'login'), ['jbloggs', 'olduser']);
+
+// A session resolves to the GLPI account it belongs to; the UPN is tried first.
+$tried = [];
+$users = (new Assembler(
+    ['id' => 1, 'deviceid' => 'osquery-test-abc123'],
+    [
+        'inv_system_info'     => [['hostname' => 'win-box']],
+        'inv_logged_in_users' => [['user' => 'matt', 'time' => '500']],
+        'inv_logon_sessions'  => [['user' => 'matt', 'logon_domain' => 'AzureAD', 'upn' => 'matt@example.com', 'logon_time' => '400']],
+    ],
+    [],
+    static function (string $login, string $upn) use (&$tried): ?string {
+        $tried[] = [$login, $upn];
+        return $upn === 'matt@example.com' ? 'matt@example.com' : null;
+    }
+))->build()['content']['users'];
+check('rows for one person merge, keeping the UPN', $tried, [['matt', 'matt@example.com']]);
+check('resolved user is sent by its GLPI name, without a domain', $users, [['login' => 'matt@example.com']]);
 
 // --------------------------------------------------------------- SQL guard
 section('live query guard');

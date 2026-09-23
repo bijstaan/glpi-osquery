@@ -41,10 +41,24 @@ final class Assembler
 
     private array $agent;
 
-    public function __construct(array $agent, array $snapshots)
+    /** @var array<string,int> query name => unix time osquery collected it */
+    private array $collectedAt;
+
+    /** @var (callable(string,string):?string)|null */
+    private $resolveUser;
+
+    /**
+     * @param array<string,int> $collectedAt when each snapshot was collected,
+     *        by the endpoint's clock; a query missing here counts as collected now
+     * @param (callable(string $login, string $upn): ?string)|null $resolveUser
+     *        maps a session to the name of an existing GLPI user, or null
+     */
+    public function __construct(array $agent, array $snapshots, array $collectedAt = [], ?callable $resolveUser = null)
     {
-        $this->agent = $agent;
-        $this->snap  = $snapshots;
+        $this->agent       = $agent;
+        $this->snap        = $snapshots;
+        $this->collectedAt = $collectedAt;
+        $this->resolveUser = $resolveUser;
     }
 
     /** Load an agent's snapshots and build its document, or null if there is nothing to say. */
@@ -53,16 +67,20 @@ final class Assembler
         /** @var \DBmysql $DB */
         global $DB;
 
-        $snapshots = [];
+        $snapshots   = [];
+        $collectedAt = [];
         foreach (
             $DB->request([
-                'SELECT' => ['query_name', 'data'],
+                'SELECT' => ['query_name', 'data', 'unix_time'],
                 'FROM'   => 'glpi_plugin_glpiosquery_snapshots',
                 'WHERE'  => ['plugin_glpiosquery_agents_id' => (int) $agent['id']],
             ]) as $row
         ) {
             $decoded = json_decode((string) $row['data'], true);
             $snapshots[(string) $row['query_name']] = is_array($decoded) ? $decoded : [];
+            if ((int) $row['unix_time'] > 0) {
+                $collectedAt[(string) $row['query_name']] = (int) $row['unix_time'];
+            }
         }
 
         // The anchor query is the one thing we refuse to do without: with no
@@ -72,7 +90,7 @@ final class Assembler
             return null;
         }
 
-        return (new self($agent, $snapshots))->build();
+        return (new self($agent, $snapshots, $collectedAt, self::glpiUserName(...)))->build();
     }
 
     public function build(): array
@@ -173,6 +191,32 @@ final class Assembler
         $first = reset($rows);
 
         return is_array($first) ? $first : [];
+    }
+
+    /**
+     * The moment of boot, from osquery's uptime.
+     *
+     * Subtracted from the time the uptime was *measured*, not from now. The
+     * inventory is assembled up to an hour after the hourly query ran, so
+     * `time() - uptime` put the boot later by that gap, and the gap was
+     * different on every rebuild. The last boot date moved on every inventory
+     * of a machine that had not restarted in weeks.
+     *
+     * Floored to the minute because unixTime and total_seconds are each
+     * truncated to the second, so the same boot can come out a second either
+     * way between runs. Without the floor that still changed the date once an
+     * hour.
+     */
+    private function bootTime(int $uptime): ?string
+    {
+        if ($uptime <= 0) {
+            return null;
+        }
+
+        $measured = $this->collectedAt['inv_uptime'] ?? time();
+        $boot     = $measured - $uptime;
+
+        return date('Y-m-d H:i:00', $boot);
     }
 
     /** @return array<int,array<string,mixed>> */
@@ -485,10 +529,9 @@ final class Assembler
             }
         }
 
-        // osquery gives uptime, GLPI wants the moment of boot.
-        $seconds = self::int($uptime, 'total_seconds');
-        if ($seconds > 0) {
-            $entry['boot_time'] = date('Y-m-d H:i:s', time() - $seconds);
+        $boot = $this->bootTime(self::int($uptime, 'total_seconds'));
+        if ($boot !== null) {
+            $entry['boot_time'] = $boot;
         }
 
         $install = self::date(self::str($os, 'install_date'), true);
@@ -1228,28 +1271,119 @@ final class Assembler
 
     private function users(): array
     {
-        $out  = [];
-        $seen = [];
-
         // POSIX via logged_in_users, Windows via logon_sessions, and Linux
         // under systemd via the user service managers — the same question,
         // three tables.
+        $sessions = [];
         foreach (['inv_logged_in_users', 'inv_session_users', 'inv_logon_sessions'] as $query) {
             foreach ($this->rows($query) as $row) {
-                $login = self::str($row, 'user');
-                if ($login === '' || isset($seen[$login])) {
+                $login  = self::str($row, 'user');
+                $domain = self::str($row, 'logon_domain');
+                if ($login === '' || self::isSystemLogon($login, $domain)) {
                     continue;
                 }
-                $seen[$login] = true;
 
-                $out[] = self::clean([
-                    'login'  => $login,
-                    'domain' => self::str($row, 'logon_domain'),
-                ]);
+                // Newest first. GLPI links the asset to the *first* user it is
+                // sent and to no other, so that one has to be the person on
+                // the machine now rather than whoever the table listed first.
+                $time = self::int($row, 'logon_time') ?: self::int($row, 'time');
+                $key  = strtolower($login);
+
+                // The same person usually appears in more than one table, and
+                // only logon_sessions carries the domain and UPN, so rows are
+                // merged rather than the older one dropped.
+                $seen = $sessions[$key] ?? ['login' => $login, 'domain' => '', 'upn' => '', 'time' => 0];
+                $sessions[$key] = [
+                    'login'  => $seen['login'],
+                    'domain' => $seen['domain'] ?: $domain,
+                    'upn'    => $seen['upn'] ?: self::str($row, 'upn'),
+                    'time'   => max($seen['time'], $time),
+                ];
             }
         }
 
+        uasort($sessions, static fn(array $a, array $b): int => $b['time'] <=> $a['time']);
+
+        $out = [];
+        foreach ($sessions as $session) {
+            // GLPI matches a user by name, exactly, on the login alone: it
+            // never sees the UPN, so a person whose GLPI account is named by
+            // UPN (every Entra SCIM account is) would never be linked. When
+            // the session resolves to an account that exists, that account's
+            // name is sent as the login instead, with no domain to append.
+            $name = $this->resolveUser !== null
+                ? ($this->resolveUser)($session['login'], $session['upn'])
+                : null;
+
+            $out[] = $name !== null
+                ? ['login' => $name]
+                : self::clean(['login' => $session['login'], 'domain' => $session['domain']]);
+        }
+
         return $out;
+    }
+
+    /**
+     * Windows' own logons, which logon_sessions reports as Interactive.
+     *
+     * Desktop Window Manager and the User Mode Font Driver each log on per
+     * session before any person does, as DWM-n in "Window Manager" and UMFD-n
+     * in "Font Driver Host". Sent as users, they became the account the asset
+     * was linked to, which matches nobody, and they filled the alternate
+     * username with DWM-1@Window Manager/UMFD-0@Font Driver Host/....
+     * The shipped query also filters on the logon SID; this is the check that
+     * works for snapshots collected before it did.
+     */
+    private static function isSystemLogon(string $login, string $domain): bool
+    {
+        return in_array(strtolower($domain), ['window manager', 'font driver host'], true)
+            || preg_match('/^(DWM|UMFD)-\d+$/i', $login) === 1;
+    }
+
+    /**
+     * The name of the GLPI user a session belongs to, if one exists.
+     *
+     * Tried in order: the UPN as a user name (how Entra SCIM names accounts),
+     * the login as a user name (local and LDAP accounts), then the UPN as a
+     * user's email. Only an active account counts, and an email shared by
+     * several accounts matches none, since picking one would be a guess.
+     */
+    public static function glpiUserName(string $login, string $upn): ?string
+    {
+        /** @var \DBmysql $DB */
+        global $DB;
+
+        foreach (array_filter([$upn, $login]) as $candidate) {
+            $row = $DB->request([
+                'SELECT' => ['name'],
+                'FROM'   => 'glpi_users',
+                'WHERE'  => ['name' => $candidate, 'is_deleted' => 0, 'is_active' => 1],
+                'LIMIT'  => 1,
+            ])->current();
+            if (is_array($row)) {
+                return (string) $row['name'];
+            }
+        }
+
+        if ($upn !== '') {
+            $names = [];
+            foreach (
+                $DB->request([
+                    'SELECT'     => ['glpi_users.name'],
+                    'FROM'       => 'glpi_useremails',
+                    'INNER JOIN' => ['glpi_users' => ['ON' => ['glpi_useremails' => 'users_id', 'glpi_users' => 'id']]],
+                    'WHERE'      => ['glpi_useremails.email' => $upn, 'glpi_users.is_deleted' => 0, 'glpi_users.is_active' => 1],
+                    'LIMIT'      => 2,
+                ]) as $row
+            ) {
+                $names[] = (string) $row['name'];
+            }
+            if (count($names) === 1) {
+                return $names[0];
+            }
+        }
+
+        return null;
     }
 
     private function batteries(): array

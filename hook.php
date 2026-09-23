@@ -651,6 +651,22 @@ function plugin_glpiosquery_migrate()
         ]
     );
 
+    // inv_logon_sessions let Windows' own Window Manager and Font Driver Host
+    // logons through as people, and did not ask for the UPN that Entra SCIM
+    // names accounts by. Matched on the shipped SQL, so an edited query is
+    // left alone.
+    $DB->update(
+        'glpi_plugin_glpiosquery_queries',
+        ['sql_query' => 'SELECT user, logon_domain, logon_time, logon_type, upn, logon_sid '
+                      . "FROM logon_sessions WHERE logon_type IN ('Interactive', 'RemoteInteractive', 'CachedInteractive') "
+                      . "AND (logon_sid LIKE 'S-1-5-21-%' OR logon_sid LIKE 'S-1-12-1-%');"],
+        [
+            'name'      => 'inv_logon_sessions',
+            'sql_query' => 'SELECT user, logon_domain, logon_time, logon_type '
+                         . "FROM logon_sessions WHERE logon_type IN ('Interactive', 'RemoteInteractive', 'CachedInteractive');",
+        ]
+    );
+
     // Four shipped saved queries gained Windows and macOS siblings, so the
     // bare names they had became ambiguous — "Connected monitors" now means one
     // of three statements. Renamed rather than left alone because the old name

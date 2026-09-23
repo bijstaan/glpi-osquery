@@ -675,8 +675,14 @@ final class DefaultPacks
                 'name'    => 'inv_logon_sessions',
                 'section' => 'users',
                 'platform' => 'windows',
-                'sql'     => 'SELECT user, logon_domain, logon_time, logon_type '
-                           . "FROM logon_sessions WHERE logon_type IN ('Interactive', 'RemoteInteractive', 'CachedInteractive');",
+                // Only people's SIDs: S-1-5-21 is a local or AD account and
+                // S-1-12-1 an Entra one. Windows' own Window Manager (S-1-5-90)
+                // and Font Driver Host (S-1-5-96) logons are Interactive too,
+                // and without this they were the user the asset was linked to.
+                // upn is what matches an account named by Entra SCIM.
+                'sql'     => 'SELECT user, logon_domain, logon_time, logon_type, upn, logon_sid '
+                           . "FROM logon_sessions WHERE logon_type IN ('Interactive', 'RemoteInteractive', 'CachedInteractive') "
+                           . "AND (logon_sid LIKE 'S-1-5-21-%' OR logon_sid LIKE 'S-1-12-1-%');",
                 'interval' => $hour,
                 'description' => 'Windows equivalent of logged_in_users; interactive sessions only, so '
                                . 'service and network logons are not reported as people.',
