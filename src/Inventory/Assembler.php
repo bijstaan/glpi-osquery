@@ -1170,7 +1170,17 @@ final class Assembler
             ]);
         }
 
-        return $out;
+        // `name` is the one field the schema requires of a software entry, and
+        // one entry without it makes GLPI reject the whole document, not just
+        // the software section. Windows has registry uninstall keys with no
+        // DisplayName (one pointing at mstsc.exe was the first seen), and
+        // clean() drops the blank name, so the entry arrives without the key.
+        // Programs and Features hides those entries too, so skipping them
+        // matches what Windows itself lists.
+        return array_values(array_filter(
+            $out,
+            static fn(array $entry): bool => ($entry['name'] ?? '') !== ''
+        ));
     }
 
     private function localUsers(): array

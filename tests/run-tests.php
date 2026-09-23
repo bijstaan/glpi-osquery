@@ -293,6 +293,17 @@ $content = assemble([
 ]);
 check('windows registry install date YYYYMMDD', $content['softwares'][0]['install_date'], '2024-01-15');
 
+// One nameless entry used to make GLPI reject the entire inventory.
+$content = assemble([
+    'inv_system_info' => [['hostname' => 'unit-test']],
+    'inv_programs'    => [
+        ['name' => '', 'version' => '10.0', 'install_location' => 'C:\\Windows\\System32\\mstsc.exe'],
+        ['name' => 'Thing', 'version' => '1.0'],
+    ],
+]);
+check('nameless software is skipped', count($content['softwares']), 1);
+check('named software survives beside it', $content['softwares'][0]['name'], 'Thing');
+
 // NUL bytes arrive in real captures (AMD cpu_brand) and must not survive.
 $content = assemble([
     'inv_system_info' => [['hostname' => 'unit-test', 'cpu_brand' => "AMD Ryzen 7\0\0", 'cpu_physical_cores' => '8']],
