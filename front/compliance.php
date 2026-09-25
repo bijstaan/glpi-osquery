@@ -89,7 +89,7 @@ $badges = [
 foreach ($fleet as $entry) {
     $agent = $entry['agent'];
     echo "<tr>";
-    echo "<td><a href='" . Html::cleanInputText(GlpiPlugin\Glpiosquery\Url::to('front/agent.form.php?id=' . (int) $agent['id'])) . "'>"
+    echo "<td><a href='" . htmlescape(GlpiPlugin\Glpiosquery\Url::to('front/agent.form.php?id=' . (int) $agent['id'])) . "'>"
        . htmlspecialchars((string) $agent['name']) . "</a></td>";
     echo "<td class='text-muted'>" . htmlspecialchars(trim((string) $agent['os_name'] . ' ' . (string) $agent['os_version'])) . "</td>";
 

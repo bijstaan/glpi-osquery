@@ -22,9 +22,9 @@ use Session;
  */
 class SavedQuery extends CommonDBTM
 {
-    public static $rightname = 'plugin_glpiosquery_pack';
+    public static string $rightname = 'plugin_glpiosquery_pack';
 
-    public $dohistory = true;
+    public bool $dohistory = true;
 
     public static function getTypeName($nb = 0)
     {

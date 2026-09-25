@@ -46,7 +46,7 @@ class WarrantyTab extends CommonGLPI
      * date, and an administrator would have to grant a second right to undo
      * something nobody asked for.
      */
-    public static $rightname = 'infocom';
+    public static string $rightname = 'infocom';
 
     public static function getTypeName($nb = 0)
     {

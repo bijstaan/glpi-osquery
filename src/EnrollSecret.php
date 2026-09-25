@@ -281,7 +281,7 @@ final class EnrollSecret
 
         $DB->update(
             self::TABLE,
-            ['enroll_count' => new \QueryExpression('enroll_count + 1')],
+            ['enroll_count' => new \Glpi\DBAL\QueryExpression('enroll_count + 1')],
             ['id' => $id]
         );
     }

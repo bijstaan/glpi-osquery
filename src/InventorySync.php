@@ -77,7 +77,7 @@ final class InventorySync
             $newest = null;
             foreach (
                 $DB->request([
-                    'SELECT' => [new \QueryExpression('MAX(' . $DB->quoteName('date_mod') . ') AS ' . $DB->quoteName('newest'))],
+                    'SELECT' => [new \Glpi\DBAL\QueryExpression('MAX(' . $DB->quoteName('date_mod') . ') AS ' . $DB->quoteName('newest'))],
                     'FROM'   => ResultIngest::SNAPSHOT_TABLE,
                     'WHERE'  => ['plugin_glpiosquery_agents_id' => $agents_id],
                 ]) as $row

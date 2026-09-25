@@ -20,7 +20,7 @@ use Session;
  */
 class LiveQueryTab extends CommonGLPI
 {
-    public static $rightname = 'plugin_glpiosquery_livequery';
+    public static string $rightname = 'plugin_glpiosquery_livequery';
 
     public static function getTypeName($nb = 0)
     {

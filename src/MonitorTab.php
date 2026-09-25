@@ -25,7 +25,7 @@ use Session;
  */
 class MonitorTab extends CommonGLPI
 {
-    public static $rightname = 'plugin_glpiosquery_agent';
+    public static string $rightname = 'plugin_glpiosquery_agent';
 
     public static function getTypeName($nb = 0)
     {

@@ -350,7 +350,7 @@ final class AgentUpdate
             $DB->request([
                 'SELECT'  => [
                     $column,
-                    new \QueryExpression('COUNT(*) AS ' . $DB->quoteName('cpt')),
+                    new \Glpi\DBAL\QueryExpression('COUNT(*) AS ' . $DB->quoteName('cpt')),
                 ],
                 'FROM'    => Node::TABLE,
                 'WHERE'   => ['is_deleted' => 0],

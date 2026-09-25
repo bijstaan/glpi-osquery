@@ -34,7 +34,7 @@ foreach ($actions as $action) {
     // that was perfectly valid.
 
     if (!$agent->getFromDB((int) $_POST['id'])) {
-        Html::displayNotFoundError();
+        throw new \Glpi\Exception\Http\NotFoundHttpException();
     }
 
     switch ($action) {
@@ -96,7 +96,7 @@ if ($id > 0 && $agent->getFromDB($id)) {
     $agent->display(['id' => $id]);
     echo "</div>";
 } else {
-    Html::displayNotFoundError();
+    throw new \Glpi\Exception\Http\NotFoundHttpException();
 }
 
 Html::footer();

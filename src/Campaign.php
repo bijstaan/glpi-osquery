@@ -216,7 +216,7 @@ final class Campaign
         $pending = 0;
 
         $rows = $DB->request([
-            'SELECT'  => ['state', new \QueryExpression('COUNT(*) AS ' . $DB->quoteName('cpt'))],
+            'SELECT'  => ['state', new \Glpi\DBAL\QueryExpression('COUNT(*) AS ' . $DB->quoteName('cpt'))],
             'FROM'    => self::TARGET_TABLE,
             'WHERE'   => ['plugin_glpiosquery_campaigns_id' => $campaigns_id],
             'GROUPBY' => ['state'],

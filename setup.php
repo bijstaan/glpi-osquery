@@ -34,7 +34,7 @@ use GlpiPlugin\Glpiosquery\WarrantyTab;
 use Glpi\Plugin\Hooks;
 
 define('PLUGIN_GLPIOSQUERY_VERSION', '0.3.1');
-define('PLUGIN_GLPIOSQUERY_MIN_GLPI', '11.0');
+define('PLUGIN_GLPIOSQUERY_MIN_GLPI', '12.0');
 
 // Config context for plugin settings (Config::setConfigurationValues).
 define('PLUGIN_GLPIOSQUERY_CONFIG_CONTEXT', 'plugin:glpiosquery');

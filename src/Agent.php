@@ -26,12 +26,12 @@ use Session;
  */
 class Agent extends CommonDBTM
 {
-    public static $rightname = 'plugin_glpiosquery_agent';
+    public static string $rightname = 'plugin_glpiosquery_agent';
 
-    public $dohistory = true;
+    public bool $dohistory = true;
 
     /** last_seen changes on every check-in; logging it would drown the history. */
-    public $history_blacklist = ['last_seen', 'has_pending', 'accelerate_until', 'inventory_dirty'];
+    public array $history_blacklist = ['last_seen', 'has_pending', 'accelerate_until', 'inventory_dirty'];
 
     public static function getTypeName($nb = 0)
     {

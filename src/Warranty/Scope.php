@@ -8,7 +8,7 @@ namespace GlpiPlugin\Glpiosquery\Warranty;
 
 use CommonDBTM;
 use DBmysql;
-use QueryExpression;
+use Glpi\DBAL\QueryExpression;
 
 /**
  * Which assets this plugin checks warranties for, and what it knows about them.
